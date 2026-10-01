@@ -860,7 +860,7 @@ def analyze_results(metrics):
 def main(config_overrides: Optional[Dict] = None):
     config = {
         # ========== Experiment Configuration ==========
-        'experiment_name': 'pythia_ag_news_augmp_alpha0p1_seed42069',  # Name for result files and logs
+        'experiment_name': 'pythia_ag_news_augmp_alpha0p5_seed42069',  # Name for result files and logs
         'seed': 42069,  # Random seed for reproducibility (int), 42 is the default
         
         # ========== Federated Learning Setup ==========
@@ -904,7 +904,7 @@ def main(config_overrides: Optional[Dict] = None):
         
         # ========== Data Distribution ==========
         'data_distribution': 'non-iid',  # 'iid' for uniform random, 'non-iid' for Dirichlet-based heterogeneous distribution
-        'dirichlet_alpha': 0.1,  # Only used when data_distribution='non-iid'. Lower = more heterogeneous, higher = more balanced
+        'dirichlet_alpha': 0.5,  # Only used when data_distribution='non-iid'. Lower = more heterogeneous, higher = more balanced
         # 'dataset_size_limit': None,  # Limit dataset size (None = full dataset). AG News: ~120K; IMDB: 25K; DBpedia: 560K; Yahoo Answers: 1.4M
         'dataset_size_limit': 20000,  # Limit for faster experimentation. When set: train ≤ limit, test ≤ limit × 0.15 (same rule for all datasets)
 
