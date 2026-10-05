@@ -7,6 +7,26 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, List, Optional
 import json
+import ast
+
+
+def resolve_experiment_name(config_overrides: Optional[Dict] = None) -> str:
+    """Read the configured output prefix without importing the training runtime."""
+    if config_overrides and 'experiment_name' in config_overrides:
+        return config_overrides['experiment_name']
+    source = Path(__file__).resolve().with_name('main.py')
+    tree = ast.parse(source.read_text(encoding='utf-8'))
+    main = next(node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == 'main')
+    for node in main.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == 'config'
+            for target in node.targets
+        ):
+            for key, value in zip(node.value.keys, node.value.values):
+                if ast.literal_eval(key) == 'experiment_name':
+                    return ast.literal_eval(value)
+    raise ValueError(f'No experiment_name found in {source}')
 
 # Set style for IEEE publication-quality figures
 # Use clean, minimal style without heavy grid
@@ -86,6 +106,29 @@ class ExperimentVisualizer:
         """Load experiment results from JSON file"""
         with open(results_path, 'r') as f:
             return json.load(f)
+
+    def generate_figures_from_results(self, results_path: str):
+        """Regenerate plots from saved observations without rerunning training."""
+        data = self.load_results(results_path)
+        config = data['config']
+        logs = data['results']
+        if not logs:
+            raise ValueError(f'No recorded rounds to plot in {results_path}')
+        local = data.get('local_accuracies')
+        if local is not None:
+            local = {int(cid): values for cid, values in local.items()}
+        num_clients = config['num_clients']
+        num_attackers = config.get('num_attackers', 0)
+        self.generate_all_figures(
+            server_log_data=logs,
+            local_accuracies=local,
+            attacker_ids=list(range(num_clients - num_attackers, num_clients)),
+            experiment_name=config['experiment_name'],
+            num_rounds=len(logs),
+            attack_start_round=config.get('attack_start_round', 0),
+            num_clients=num_clients,
+            num_attackers=num_attackers,
+        )
     
     def plot_figure3_global_accuracy_stability(self, log_data: List[Dict], save_path: Optional[str] = None, num_rounds: Optional[int] = None):
         """
@@ -825,4 +868,3 @@ class ExperimentVisualizer:
         
         print("\n✅ All available figures generated successfully!")
         print(f"   Output directory: {self.results_dir}")
-

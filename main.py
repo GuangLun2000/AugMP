@@ -536,10 +536,6 @@ def run_experiment(config):
 
     print(f"\nResults saved to: {results_path}")
 
-    save_global_model_checkpoint(server, config, results_dir)
-
-    run_downstream_task2_if_configured(config, results_dir)
-
     # Print detailed statistics for data collection
     attacker_ids = [client.client_id for client in server.clients 
                    if getattr(client, 'is_attacker', False)]
@@ -565,6 +561,10 @@ def run_experiment(config):
         num_clients=config['num_clients'],
         num_attackers=config['num_attackers']
     )
+
+    save_global_model_checkpoint(server, config, results_dir)
+
+    run_downstream_task2_if_configured(config, results_dir)
     
     return server.log_data, progressive_metrics
 
