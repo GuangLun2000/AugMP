@@ -13,6 +13,24 @@
 
 from typing import Optional
 
+# ================================================================================================
+# EDIT HERE -- the ONE place to choose the observability experiment to run.
+# The Colab notebook (Step 3) and any `main(config_overrides=ACTIVE_CONFIG)` call read ACTIVE_CONFIG
+# built from this; nothing is configured in the notebook itself. Change these values, not the notebook.
+#
+#   k      : benign updates the attacker observes -- int count | 0 = Secure Aggregation | 7 = full
+#   mode   : 'fixed' | 'random' | 'largest' | 'adaptive'
+#   anchor : also use the global-broadcast anchor row (recommended main line)
+#   rounds : 30 for the limited-observation sweep runs, 50 for full-observation reference runs
+#   attack : 'AugMP' (default) | 'ALIE' | 'none' (benign baseline, no attackers)
+# Examples:  dict(k=7, rounds=50)                 full-observation reference
+#            dict(k=0, rounds=30)                 Secure Aggregation endpoint
+#            dict(k=None, attack='none', rounds=50)  benign baseline
+#            dict(k=2, attack='ALIE')             ALIE under the same limitation
+# (full signature in make_config() below: model, dataset, alpha, clients, attackers, criterion, ...)
+# ================================================================================================
+ACTIVE = dict(k=7, rounds=50)   # full observation (attacker sees all 7 benign updates), 50-round reference run
+
 # ---------------------------------------------------------------- controlled variables (paper standard)
 STANDARD = {
     # federation: 10 agents = 7 benign + 3 attackers (~30% attackers, close to the paper's 2/7)
@@ -155,8 +173,13 @@ def make_config(k=2, *, attack='AugMP', model='distilbert', dataset='ag_news',
     return cfg
 
 
+# The active experiment, built once from the ACTIVE block at the top of this file.
+ACTIVE_CONFIG = make_config(**ACTIVE)
+
+
 if __name__ == '__main__':
     # sanity: names match the sweep driver's scheme and the config is fully pinned
+    print("ACTIVE_CONFIG:", ACTIVE_CONFIG['experiment_name'])
     a = make_config(2, mode='largest', anchor=True)
     assert a['experiment_name'] == 'obs_distilbert_ag_news_augmp_k2of7_largest_anchor_r30', a['experiment_name']
     assert a['dirichlet_alpha'] == 0.3 and a['model_name'] == 'distilbert-base-uncased'
