@@ -7,8 +7,8 @@ This driver re-uses main.py unchanged (config overrides only) and launches every
 subprocess, so each run gets a clean CUDA context and its own log under results/observe/logs/.
 
 Ablation setting (observe/observe_config.py:EXPERIMENT supplies every default, override with CLI flags):
-  paper setting 7 agents = 5 benign + 2 attackers, Dirichlet 0.3, 20k AG News samples,
-  DistilBERT + LoRA(r=8), 5 local epochs.  Attackers observe k of the 5 benign updates.
+  Qwen reference run: 7 agents = 5 benign + 2 attackers, Dirichlet 0.1, 20k AG News samples,
+  Qwen2.5-0.5B + LoRA(r=8), 2 local epochs.  Attackers observe k of the 5 benign updates.
 
 Typical sequence (run from the repo root as `python observe/run_observability_sweep.py ...`):
   # 1) anchors at full observation (50 rounds): benign baseline, ALIE, AugMP
@@ -130,9 +130,9 @@ def main():
                     help="SecAgg (--k 0): number of recent global-broadcast deltas used as pseudo benign rows")
     ap.add_argument('--obs-seed', nargs='*', type=int, default=[None],
                     help="seed(s) for drawing the observed subset (default: the experiment seed)")
-    ap.add_argument('--rounds', type=int, default=30)
-    ap.add_argument('--model', default='distilbert', choices=sorted(MODEL_PRESETS))
-    ap.add_argument('--dataset', default='ag_news', choices=sorted(DATASET_PRESETS))
+    ap.add_argument('--rounds', type=int, default=EXPERIMENT['rounds'])
+    ap.add_argument('--model', default=EXPERIMENT['model'], choices=sorted(MODEL_PRESETS))
+    ap.add_argument('--dataset', default=EXPERIMENT['dataset'], choices=sorted(DATASET_PRESETS))
     ap.add_argument('--clients', type=int, default=EXPERIMENT['clients'])
     ap.add_argument('--attackers', type=int, default=EXPERIMENT['attackers'])
     ap.add_argument('--alpha', type=float, default=EXPERIMENT['alpha'], help='Dirichlet alpha')

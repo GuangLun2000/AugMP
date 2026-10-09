@@ -24,19 +24,19 @@ from typing import Optional
 #   obs_seed     seed for drawing the observed subset (None = seed)
 #   attack       'AugMP' | 'ALIE' | 'Gaussian' | 'SignFlipping' | 'none' (benign baseline, k ignored)
 #   clients / attackers   paper setting: 7 agents = 5 benign + 2 attackers
-#   rounds       50 for reference runs, 30 for the limited-observation sweep (compared at round 30)
-#   alpha        Dirichlet heterogeneity (paper's main level 0.3)
-#   local_epochs local training epochs per round (paper: 5)
+#   rounds       50 for every run (anchors and limited-observation runs alike)
+#   alpha        Dirichlet heterogeneity (Qwen reference run / paper Fig. 3(c): 0.3)
+#   local_epochs local training epochs per round (Qwen reference run: 2)
 #   dist_bound / sim_bound_up   None = adaptive from the observed updates (paper); a float freezes it
 # Examples:  make_config()                      the EXPERIMENT run itself
-#            make_config(k=2, rounds=30)        40% observation
-#            make_config(k=0, rounds=30)        Secure Aggregation endpoint
+#            make_config(k=2)                   40% observation
+#            make_config(k=0)                   Secure Aggregation endpoint
 #            make_config(attack='none')         benign baseline
 #            make_config(k=2, attack='ALIE')    ALIE under the same limitation
 # ================================================================================================
 EXPERIMENT = dict(
     # --- what the attackers may observe ---
-    k=5,
+    k=2,
     mode='fixed',
     anchor=False,
     obs_seed=None,
@@ -50,10 +50,10 @@ EXPERIMENT = dict(
     rounds=50,
     seed=42069,
     # --- data / training ---
-    model='distilbert',       # key of MODEL_PRESETS
+    model='qwen',             # key of MODEL_PRESETS (Qwen/Qwen2.5-0.5B)
     dataset='ag_news',        # key of DATASET_PRESETS
     alpha=0.3,
-    local_epochs=5,
+    local_epochs=2,
     # --- optional frozen bounds ---
     dist_bound=None,
     sim_bound_up=None,
@@ -62,6 +62,8 @@ EXPERIMENT = dict(
 
 # ---------------------------------------------------------------- pinned hyper-parameters (paper AugMP)
 # Everything that must NOT change between runs of the ablation. Per-run knobs are in EXPERIMENT above.
+# Values = the Qwen reference run of paper Fig. 3(c) (observe_results/Qwen_ref-non-iid-0.3历史参考数据, 2026-03-06,
+# seed 42069, alpha 0.3); keys its config block does not print were read from its optimisation log.
 FIXED = {
     'num_benign_clients': None,
     'data_distribution': 'non-iid',
@@ -80,7 +82,7 @@ FIXED = {
     'lora_target_modules': None,
     # attack: adaptive bounds, exactly as in the main experiments
     'attack_start_round': 0,
-    'sim_bound_low': 0.0,
+    'sim_bound_low': None,    # None = observed benign min pairwise sim (band [min, mean] is never empty)
     'server_similarity_mode': 'pairwise',
     'use_lagrangian_dual': True,
     'use_cosine_similarity_constraint': True,
@@ -97,14 +99,14 @@ FIXED = {
     'attacker_use_proxy_data': True,
     'proxy_step': 0.001,
     'proxy_steps': 200,
-    'proxy_sample_size': 512,
+    'proxy_sample_size': 200,
     'proxy_max_batches_opt': 1,
     'proxy_max_batches_eval': 1,
     'attacker_proxy_grad_clip_norm': 1.0,
     'early_stop_constraint_stability_steps': 1,
     'attacker_claimed_data_size': None,
     # VGAE + graph
-    'dim_reduction_size': 500,
+    'dim_reduction_size': 1000,
     'vgae_epochs': 20,
     'vgae_lr': 0.01,
     'vgae_hidden_dim': 64,
@@ -215,22 +217,23 @@ if __name__ == '__main__':
     # sanity: names follow one scheme, EXPERIMENT drives the defaults, FIXED never leaks a per-run knob
     e = EXPERIMENT_CONFIG
     print("EXPERIMENT_CONFIG:", e['experiment_name'])
-    assert e['experiment_name'] == 'obs_distilbert_ag_news_augmp_k5of5_fixed_r50', e['experiment_name']
-    assert e['num_clients'] == 7 and e['num_attackers'] == 2 and e['local_epochs'] == 5
-    assert e['dirichlet_alpha'] == 0.3 and e['model_name'] == 'distilbert-base-uncased'
+    assert e['experiment_name'] == 'obs_qwen_ag_news_augmp_k2of5_fixed_r50', e['experiment_name']
+    assert e['num_clients'] == 7 and e['num_attackers'] == 2 and e['local_epochs'] == 2
+    assert e['dirichlet_alpha'] == 0.3 and e['model_name'] == 'Qwen/Qwen2.5-0.5B'
     assert e['lambda_update_mode'] == 'alm' and e['dist_bound'] is None and e['sim_bound_up'] is None
+    assert e['sim_bound_low'] is None and e['dim_reduction_size'] == 1000 and e['proxy_sample_size'] == 200
     assert not (set(FIXED) & {'num_clients', 'num_attackers', 'num_rounds', 'seed', 'dirichlet_alpha', 'local_epochs'})
     a = make_config(k=2, mode='largest', anchor=True, rounds=30)
-    assert a['experiment_name'] == 'obs_distilbert_ag_news_augmp_k2of5_largest_anchor_r30', a['experiment_name']
-    assert make_config(k=0, rounds=30)['experiment_name'] == 'obs_distilbert_ag_news_augmp_k0of5_secagg_r30'
-    assert make_config(k=2, obs_seed=1, rounds=30)['experiment_name'] == 'obs_distilbert_ag_news_augmp_k2of5_fixed_os1_r30'
-    assert make_config(k=2, attack='ALIE', rounds=30)['experiment_name'] == 'obs_distilbert_ag_news_alie_k2of5_fixed_r30'
+    assert a['experiment_name'] == 'obs_qwen_ag_news_augmp_k2of5_largest_anchor_r30', a['experiment_name']
+    assert make_config(k=0, rounds=30)['experiment_name'] == 'obs_qwen_ag_news_augmp_k0of5_secagg_r30'
+    assert make_config(k=2, obs_seed=1, rounds=30)['experiment_name'] == 'obs_qwen_ag_news_augmp_k2of5_fixed_os1_r30'
+    assert make_config(k=2, attack='ALIE', rounds=30)['experiment_name'] == 'obs_qwen_ag_news_alie_k2of5_fixed_r30'
     b = make_config(attack='none')
-    assert b['experiment_name'] == 'obs_distilbert_ag_news_benign_r50' and b['num_attackers'] == 0
+    assert b['experiment_name'] == 'obs_qwen_ag_news_benign_r50' and b['num_attackers'] == 0
     assert 'attacker_observed_benign' not in b
-    assert make_config(k=0.4, rounds=30)['experiment_name'] == 'obs_distilbert_ag_news_augmp_k0p40of5_fixed_r30'
-    assert make_config(k=7, clients=10, attackers=3)['experiment_name'] == 'obs_distilbert_ag_news_augmp_k7of7_fixed_r50'
-    assert make_config(local_epochs=2)['local_epochs'] == 2
+    assert make_config(k=0.4, rounds=30)['experiment_name'] == 'obs_qwen_ag_news_augmp_k0p40of5_fixed_r30'
+    assert make_config(k=7, clients=10, attackers=3, model='distilbert')['experiment_name'] == 'obs_distilbert_ag_news_augmp_k7of7_fixed_r50'
+    assert make_config(local_epochs=5)['local_epochs'] == 5
     assert make_config(k=2, dist_bound=0.5, sim_bound_up=0.3)['dist_bound'] == 0.5
     assert make_config(extra={'proxy_steps': 50})['proxy_steps'] == 50
     for bad in (dict(k=6), dict(bogus=1), dict(attack='foo'), dict(clients=2, attackers=2)):
