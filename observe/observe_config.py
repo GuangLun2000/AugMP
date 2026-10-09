@@ -45,7 +45,7 @@ STANDARD = {
     # local training
     'client_lr': 5e-5,
     'server_lr': 1.0,
-    'local_epochs': 5,
+    'local_epochs': 2,
     'batch_size': 128,
     'test_batch_size': 256,
     'alpha': 0.0,
