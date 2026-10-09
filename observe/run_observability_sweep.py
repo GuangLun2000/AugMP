@@ -6,7 +6,7 @@ Reviewer concern: in practice an adversary may observe only a subset of the beni
 This driver re-uses main.py unchanged (config overrides only) and launches every run in a fresh
 subprocess, so each run gets a clean CUDA context and its own log under results/observe/logs/.
 
-Ablation setting (ABLATION_SETTING below, override with CLI flags):
+Ablation setting (pinned in observe/observe_config.py:STANDARD, override with CLI flags):
   10 agents = 7 benign + 3 attackers (30% attackers, close to the paper's 2/7), Dirichlet 0.3,
   20k AG News samples, DistilBERT + LoRA(r=8).  Attackers observe k of the 7 benign updates.
 
@@ -38,90 +38,13 @@ import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent  # repo root (this file lives in observe/)
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))  # so `observe` is importable when run as `python observe/...`
 
-# Fully pinned config for the observability experiment. Every training/attack hyper-parameter is
-# fixed HERE so the experiment is reproducible on its own and never inherits main.py's default block
-# (main.py is used for a different experiment and changes over time). Only the observation keys and
-# the CLI-exposed knobs (model, dataset, k, mode, rounds, seed, alpha) vary across runs; everything
-# below is a controlled variable held at the paper-standard AugMP values.
-ABLATION_SETTING = {
-    # --- federation: 10 agents = 7 benign + 3 attackers (~30% attackers, close to the paper's 2/7) ---
-    'num_clients': 10,
-    'num_attackers': 3,
-    'num_benign_clients': None,
-    'seed': 42069,
-    # --- data (paper standard; non-IID Dirichlet 0.3) ---
-    'data_distribution': 'non-iid',
-    'dirichlet_alpha': 0.3,
-    'dataset_size_limit': 20000,
-    # --- local training (paper standard) ---
-    'client_lr': 5e-5,
-    'server_lr': 1.0,
-    'local_epochs': 5,
-    'batch_size': 128,
-    'test_batch_size': 256,
-    'alpha': 0.0,
-    # --- LoRA (paper standard) ---
-    'use_lora': True,
-    'lora_r': 8,
-    'lora_alpha': 16,
-    'lora_dropout': 0.1,
-    'lora_target_modules': None,
-    # --- attack: adaptive bounds, exactly as in the main experiments ---
-    'attack_start_round': 0,
-    'dist_bound': None,            # auto-estimate d_T from the observed subset (overridden by --dist-bound)
-    'sim_bound_low': 0.0,
-    'sim_bound_up': None,          # auto = benign mean pairwise similarity (overridden by --sim-bound-up)
-    'server_similarity_mode': 'pairwise',
-    'use_lagrangian_dual': True,
-    'use_cosine_similarity_constraint': True,
-    'use_pairwise_similarity_in_constraint': True,
-    'use_augmented_lagrangian': True,
-    'lambda_update_mode': 'alm',
-    'lambda_dist_init': 0.1, 'lambda_dist_lr': 0.01,
-    'lambda_sim_low_init': 0.1, 'lambda_sim_up_init': 0.1,
-    'lambda_sim_low_lr': 0.01, 'lambda_sim_up_lr': 0.01,
-    'rho_dist_init': 1.0, 'rho_sim_low_init': 1.0, 'rho_sim_up_init': 1.0,
-    'rho_adaptive': True, 'rho_theta': 0.5, 'rho_increase_factor': 2.0,
-    'rho_min': 1e-4, 'rho_max': 1e4,
-    # --- proxy objective (paper standard) ---
-    'attacker_use_proxy_data': True,
-    'proxy_step': 0.001,
-    'proxy_steps': 200,
-    'proxy_sample_size': 512,
-    'proxy_max_batches_opt': 1,
-    'proxy_max_batches_eval': 1,
-    'attacker_proxy_grad_clip_norm': 1.0,
-    'early_stop_constraint_stability_steps': 1,
-    'attacker_claimed_data_size': None,
-    # --- VGAE + graph (paper standard) ---
-    'dim_reduction_size': 500,
-    'vgae_epochs': 20,
-    'vgae_lr': 0.01,
-    'vgae_hidden_dim': 64,
-    'vgae_latent_dim': 32,
-    'vgae_dropout': 0,
-    'vgae_kl_weight': 0.1,
-    'graph_threshold': 0.5,
-    # --- keep the ablation lean (no checkpoint / downstream generation) ---
-    'save_global_checkpoint': False,
-    'run_downstream_after_fl': False,
-}
-
-MODEL_PRESETS = {
-    'distilbert': {'model_name': 'distilbert-base-uncased', 'grad_clip_norm': 1.0},
-    'gpt2':       {'model_name': 'gpt2', 'grad_clip_norm': 1.0},
-    'pythia':     {'model_name': 'EleutherAI/pythia-160m', 'grad_clip_norm': 0.5},
-    'opt':        {'model_name': 'facebook/opt-125m', 'grad_clip_norm': 1.0},
-    'qwen':       {'model_name': 'Qwen/Qwen2.5-0.5B', 'grad_clip_norm': 1.0},
-}
-DATASET_PRESETS = {
-    'ag_news':       {'dataset': 'ag_news', 'num_labels': 4, 'max_length': 128},
-    'yahoo_answers': {'dataset': 'yahoo_answers', 'num_labels': 10, 'max_length': 256},
-    'imdb':          {'dataset': 'imdb', 'num_labels': 2, 'max_length': 256},
-    'dbpedia':       {'dataset': 'dbpedia', 'num_labels': 14, 'max_length': 256},
-}
-ATTACK_CHOICES = ('AugMP', 'ALIE', 'Gaussian', 'SignFlipping', 'none')
+# Config is built by observe/observe_config.py (single source of truth; the Colab notebook uses the
+# same make_config()). STANDARD holds the pinned controlled variables; only observation keys vary.
+from observe.observe_config import (STANDARD, MODEL_PRESETS, DATASET_PRESETS, ATTACK_CHOICES,
+                                    make_config, k_tag)
 
 
 def parse_k(text: str):
@@ -137,54 +60,19 @@ def parse_k(text: str):
     return v
 
 
-def k_tag(k) -> str:
-    return f"{k:.2f}".replace('0.', '0p') if isinstance(k, float) else str(k)
 
 
-def build_overrides(args, attack: str, k, obs_seed):
-    cfg = dict(ABLATION_SETTING)
-    cfg.update(MODEL_PRESETS[args.model])
-    cfg.update(DATASET_PRESETS[args.dataset])
-    cfg['num_clients'] = args.clients
-    cfg['num_rounds'] = args.rounds
-    cfg['seed'] = args.seed
-    cfg['dirichlet_alpha'] = args.alpha
-    if args.dist_bound is not None:
-        cfg['dist_bound'] = args.dist_bound
-    if args.sim_bound_up is not None:
-        cfg['sim_bound_up'] = args.sim_bound_up
-
-    n_benign = args.clients - args.attackers
-    if attack == 'none':
-        cfg['num_attackers'] = 0
-        name = f"obs_{args.model}_{args.dataset}_benign_r{args.rounds}"
-    else:
-        cfg['num_attackers'] = args.attackers
-        cfg['attack_method'] = attack
-        cfg['attacker_observed_benign'] = k
-        cfg['attacker_observation_mode'] = args.mode
-        cfg['attacker_observation_seed'] = obs_seed
-        cfg['attacker_observation_criterion'] = args.criterion
-        cfg['attacker_observation_explore_rounds'] = args.explore_rounds
-        cfg['attacker_observation_anchor_global'] = bool(args.anchor)
-        cfg['attacker_observation_global_window'] = args.global_window
-        if isinstance(k, int) and k == 0:
-            mode_tag = 'secagg'  # Secure Aggregation: no benign updates observed, only the global broadcast
-            name = f"obs_{args.model}_{args.dataset}_{attack.lower()}_k0of{n_benign}_secagg"
-        else:
-            mode_tag = args.mode + (f"-{args.criterion}" if args.mode == 'adaptive' else '')
-            name = f"obs_{args.model}_{args.dataset}_{attack.lower()}_k{k_tag(k)}of{n_benign}_{mode_tag}"
-            if args.anchor:
-                name += "_anchor"
-        if obs_seed is not None:
-            name += f"_os{obs_seed}"
-        name += f"_r{args.rounds}"
-    if args.suffix:
-        name += f"_{args.suffix}"
-    cfg['experiment_name'] = name
-    if args.extra:
-        cfg.update(json.loads(args.extra))
-    return name, cfg
+def build_overrides(args, attack, k, obs_seed):
+    """Delegate to observe_config.make_config so the driver and the notebook share one pinned config."""
+    extra = json.loads(args.extra) if args.extra else None
+    cfg = make_config(
+        k, attack=attack, model=args.model, dataset=args.dataset, rounds=args.rounds,
+        seed=args.seed, alpha=args.alpha, clients=args.clients, attackers=args.attackers,
+        mode=args.mode, anchor=args.anchor, criterion=args.criterion, explore_rounds=args.explore_rounds,
+        global_window=args.global_window, obs_seed=obs_seed, dist_bound=args.dist_bound,
+        sim_bound_up=args.sim_bound_up, suffix=args.suffix, extra=extra,
+    )
+    return cfg['experiment_name'], cfg
 
 
 def run_one(name: str, cfg: dict, results_dir: Path, dry_run: bool) -> int:
@@ -245,10 +133,10 @@ def main():
     ap.add_argument('--rounds', type=int, default=30)
     ap.add_argument('--model', default='distilbert', choices=sorted(MODEL_PRESETS))
     ap.add_argument('--dataset', default='ag_news', choices=sorted(DATASET_PRESETS))
-    ap.add_argument('--clients', type=int, default=ABLATION_SETTING['num_clients'])
-    ap.add_argument('--attackers', type=int, default=ABLATION_SETTING['num_attackers'])
-    ap.add_argument('--alpha', type=float, default=ABLATION_SETTING['dirichlet_alpha'], help='Dirichlet alpha')
-    ap.add_argument('--seed', type=int, default=ABLATION_SETTING['seed'])
+    ap.add_argument('--clients', type=int, default=STANDARD['num_clients'])
+    ap.add_argument('--attackers', type=int, default=STANDARD['num_attackers'])
+    ap.add_argument('--alpha', type=float, default=STANDARD['dirichlet_alpha'], help='Dirichlet alpha')
+    ap.add_argument('--seed', type=int, default=STANDARD['seed'])
     ap.add_argument('--dist-bound', type=float, default=None, help='freeze d_T (default: adaptive from observed updates)')
     ap.add_argument('--sim-bound-up', type=float, default=None, help='freeze the similarity upper bound')
     ap.add_argument('--suffix', default='', help='appended to experiment names')

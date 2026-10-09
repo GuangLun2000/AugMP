@@ -33,10 +33,11 @@
 ├── attack_baseline_alie.py            # ALIE baseline (NeurIPS ’19)
 ├── attack_baseline_gaussian.py        # Gaussian baseline (USENIX Security ’20)
 ├── attack_baseline_sign_flipping.py   # Sign-flipping baseline (ICML ’18)
-├── observe/                           # Limited-observability experiment
+├── observe/                           # Limited-observability experiment (runs through main.py via config)
+│   ├── observe_config.py              # make_config(): pinned config for one observe run
 │   ├── observability.py               # Observation policy (which benign updates attackers see)
-│   ├── run_observability_sweep.py     # Sweep driver (one subprocess per run)
-│   └── plot_observability.py          # Figures + CSV summary
+│   ├── run_observability_sweep.py     # Optional CLI driver for multi-run sweeps
+│   └── plot_observability.py          # Cross-k comparison figures + CSV summary
 ├── AugMP_Colab.ipynb                  # Colab-oriented notebook (AugMP)
 └── data/                              # Training and testing datasets
 ```
