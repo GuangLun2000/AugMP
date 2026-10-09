@@ -43,9 +43,9 @@ from typing import Optional
 # ================================================================================================
 EXPERIMENT = dict(
     # --- what the attackers may observe ---
-    k=5,
+    k=2,
     mode='fixed',
-    anchor=False,
+    anchor=True,
     obs_seed=None,
     criterion='deviant',      # 'adaptive' mode only: 'deviant' | 'representative'
     explore_rounds=None,      # 'adaptive' mode only: rotation rounds before locking in
@@ -62,7 +62,7 @@ EXPERIMENT = dict(
     alpha=0.3,
     local_epochs=2,
     # --- parameter-level partial observation (None = off) ---
-    param_fraction=0.8,
+    param_fraction=None,
     param_fill='zero',
     param_mask_fixed=False,
     # --- optional frozen bounds ---
@@ -243,36 +243,38 @@ if __name__ == '__main__':
     # sanity: names follow one scheme, EXPERIMENT drives the defaults, FIXED never leaks a per-run knob
     e = EXPERIMENT_CONFIG
     print("EXPERIMENT_CONFIG:", e['experiment_name'])
-    assert e['experiment_name'] == 'obs_qwen_ag_news_augmp_k5of5_fixed_p0p80_r50', e['experiment_name']
+    assert e['experiment_name'] == 'obs_qwen_ag_news_augmp_k2of5_fixed_anchor_r50', e['experiment_name']
     assert e['num_clients'] == 7 and e['num_attackers'] == 2 and e['local_epochs'] == 2
     assert e['dirichlet_alpha'] == 0.3 and e['model_name'] == 'Qwen/Qwen2.5-0.5B'
     assert e['lambda_update_mode'] == 'alm' and e['dist_bound'] is None and e['sim_bound_up'] is None
     assert e['sim_bound_low'] is None and e['dim_reduction_size'] == 1000 and e['proxy_sample_size'] == 200
     assert not (set(FIXED) & {'num_clients', 'num_attackers', 'num_rounds', 'seed', 'dirichlet_alpha', 'local_epochs'})
-    # name scheme for client-level runs (param_fraction=None so the check does not depend on EXPERIMENT)
-    a = make_config(k=2, mode='largest', anchor=True, rounds=30, param_fraction=None)
+    # name-scheme checks use explicit observation keys so they never depend on what EXPERIMENT currently holds
+    BASE = dict(mode='fixed', anchor=False, obs_seed=None, param_fraction=None, param_fill='zero', param_mask_fixed=False)
+    mc = lambda **kw: make_config(**{**BASE, **kw})
+    a = mc(k=2, mode='largest', anchor=True, rounds=30)
     assert a['experiment_name'] == 'obs_qwen_ag_news_augmp_k2of5_largest_anchor_r30', a['experiment_name']
-    assert make_config(k=0, rounds=30, param_fraction=None)['experiment_name'] == 'obs_qwen_ag_news_augmp_k0of5_secagg_r30'
-    assert make_config(k=2, obs_seed=1, rounds=30, param_fraction=None)['experiment_name'] == 'obs_qwen_ag_news_augmp_k2of5_fixed_os1_r30'
-    assert make_config(k=2, attack='ALIE', rounds=30, param_fraction=None)['experiment_name'] == 'obs_qwen_ag_news_alie_k2of5_fixed_r30'
-    b = make_config(attack='none')
+    assert mc(k=0, rounds=30)['experiment_name'] == 'obs_qwen_ag_news_augmp_k0of5_secagg_r30'
+    assert mc(k=2, obs_seed=1, rounds=30)['experiment_name'] == 'obs_qwen_ag_news_augmp_k2of5_fixed_os1_r30'
+    assert mc(k=2, attack='ALIE', rounds=30)['experiment_name'] == 'obs_qwen_ag_news_alie_k2of5_fixed_r30'
+    b = mc(attack='none', rounds=50)
     assert b['experiment_name'] == 'obs_qwen_ag_news_benign_r50' and b['num_attackers'] == 0
     assert 'attacker_observed_benign' not in b
-    assert make_config(k=0.4, rounds=30, param_fraction=None)['experiment_name'] == 'obs_qwen_ag_news_augmp_k0p40of5_fixed_r30'
-    assert make_config(k=7, clients=10, attackers=3, rounds=50, param_fraction=None)['experiment_name'] == 'obs_qwen_ag_news_augmp_k7of7_fixed_r50'
-    assert make_config(local_epochs=2)['local_epochs'] == 2
-    assert make_config(k=2, dist_bound=0.5, sim_bound_up=0.3)['dist_bound'] == 0.5
-    assert make_config(extra={'proxy_steps': 50})['proxy_steps'] == 50
+    assert mc(k=0.4, rounds=30)['experiment_name'] == 'obs_qwen_ag_news_augmp_k0p40of5_fixed_r30'
+    assert mc(k=7, clients=10, attackers=3, rounds=50)['experiment_name'] == 'obs_qwen_ag_news_augmp_k7of7_fixed_r50'
+    assert mc(k=5, local_epochs=2)['local_epochs'] == 2
+    assert mc(k=2, dist_bound=0.5, sim_bound_up=0.3)['dist_bound'] == 0.5
+    assert mc(k=5, extra={'proxy_steps': 50})['proxy_steps'] == 50
     # parameter-level partial observation
-    q = make_config(k=5, param_fraction=0.2, rounds=50)
+    q = mc(k=5, param_fraction=0.2, rounds=50)
     assert q['experiment_name'] == 'obs_qwen_ag_news_augmp_k5of5_fixed_p0p20_r50', q['experiment_name']
     assert q['attacker_observed_param_fraction'] == 0.2 and q['attacker_observed_param_fill'] == 'zero'
     assert q['attacker_observed_param_mask_fixed'] is False and q['attacker_observed_benign'] == 5
-    assert make_config(k=5, param_fraction=0.6, param_fill='gaussian', param_mask_fixed=True)['experiment_name'] \
+    assert mc(k=5, param_fraction=0.6, param_fill='gaussian', param_mask_fixed=True, rounds=50)['experiment_name'] \
         == 'obs_qwen_ag_news_augmp_k5of5_fixed_p0p60-gaussian-fixedmask_r50'
-    assert 'attacker_observed_param_fraction' not in make_config(k=5, param_fraction=None)  # None: off
-    assert make_config(k=5, param_fraction=1.0)['experiment_name'] == make_config(k=5, param_fraction=None)['experiment_name']  # p=1 -> same run name
-    assert 'attacker_observed_param_fraction' not in make_config(attack='none', param_fraction=0.2)  # benign ignores it
+    assert 'attacker_observed_param_fraction' not in mc(k=5)                         # None: off
+    assert mc(k=5, param_fraction=1.0)['experiment_name'] == mc(k=5)['experiment_name']  # p=1 -> same run name
+    assert 'attacker_observed_param_fraction' not in mc(attack='none', param_fraction=0.2)  # benign ignores it
     for bad in (dict(param_fraction=0.0), dict(param_fraction=2), dict(param_fill='noise')):
         try:
             make_config(k=5, **bad)
