@@ -5,6 +5,7 @@ plot_observability.py — summarise and plot the limited-observability ablation.
 Reads the *_results.json files written by main.py (by default results/obs_*_results.json, as
 produced by observe/run_observability_sweep.py) and writes to --out (default: results/observe/):
   observability_accuracy_curves.png  global accuracy vs round, one line per observation level
+  observability_param_retention.png  accuracy drop vs share of parameters observed (parameter-level runs)
   observability_retention.png        accuracy drop vs observed fraction, ALIE at full observation as reference
   observability_dist_bound.png       attacker-side automatic d_T per round (mechanism: bound shrinkage vs GRL)
   observability_summary.csv          one row per run (accuracy, drop vs benign, retention, stealth in-band rates, d_T)
@@ -66,6 +67,7 @@ class Run:
     acc: List[float]
     logs: List[dict]
     attacker_ids: List[int] = field(default_factory=list)
+    param_fraction: float = 1.0   # share of each observed update's coordinates the attackers see
 
     @property
     def n_benign(self) -> int:
@@ -89,7 +91,13 @@ class Run:
             parts.append('anchor')
         if self.fixed_bounds:
             parts.append('fixed-bounds')
+        if self.param_fraction < 1.0:
+            parts.append('params')
         return '+'.join(parts) if parts else 'fixed'
+
+    @property
+    def param_level(self) -> bool:
+        return self.attack != 'benign' and self.param_fraction < 1.0
 
     def label(self) -> str:
         if self.attack == 'benign':
@@ -97,8 +105,10 @@ class Run:
         if self.k == 0:
             return f"{self.attack}, SecAgg (k=0, global-only)"
         base = f"{self.attack}, k={self.k}/{self.n_benign} ({self.frac:.0%})"
-        if self.variant != 'fixed':
-            base += f', {self.variant}'
+        if self.param_level:
+            base += f", {self.param_fraction:.0%} of parameters"
+        if self.variant not in ('fixed', 'params'):
+            base += f', {self.variant.replace("+params", "")}'
         if self.obs_seed is not None:
             base += f', subset {self.obs_seed}'
         return base
@@ -135,7 +145,18 @@ def load_run(path: str) -> Run:
         anchor=bool(cfg.get('attacker_observation_anchor_global', False)),
         rounds=list(pm.get('rounds', [])), acc=list(pm.get('clean_acc', [])), logs=list(d.get('results', [])),
         attacker_ids=list(range(n_ben, n_cli)),
+        param_fraction=float(cfg.get('attacker_observed_param_fraction', None) or 1.0) if attack != 'benign' else 1.0,
     )
+
+
+def unobserved_energy_series(run: Run) -> List[Optional[float]]:
+    """Per-round mean share of the attackers' submitted-update energy on the hidden coordinates."""
+    out = []
+    for log in run.logs:
+        d = log.get('attacker_unobserved_energy_frac') or {}
+        vals = [v for v in d.values() if v is not None]
+        out.append(float(np.mean(vals)) if vals else None)
+    return out
 
 
 # ------------------------------------------------------------------ metrics
@@ -290,8 +311,40 @@ def plot_curves(plt, runs: List[Run], out: Path, at_round: Optional[int]):
     plt.close(fig)
 
 
+def plot_param_retention(plt, rows: List[dict], out: Path):
+    """Accuracy drop vs. share of parameters observed (all benign clients observed, adaptive bounds)."""
+    pr = [r for r in rows if r['attack'] == 'AugMP' and not np.isnan(r['drop_pp'])
+          and abs(r['frac'] - 1.0) < 1e-9 and r['variant'] in ('fixed', 'params')]
+    if not any(r['param_fraction'] < 1.0 for r in pr):
+        return
+    fig, ax = plt.subplots(figsize=(5.8, 4.2))
+    pf = sorted({r['param_fraction'] for r in pr})
+    means = [np.mean([r['drop_pp'] for r in pr if r['param_fraction'] == f]) for f in pf]
+    lo = [means[i] - min(r['drop_pp'] for r in pr if r['param_fraction'] == f) for i, f in enumerate(pf)]
+    hi = [max(r['drop_pp'] for r in pr if r['param_fraction'] == f) - means[i] for i, f in enumerate(pf)]
+    full = means[pf.index(1.0)] if 1.0 in pf else None
+    x = [100 * f for f in pf]
+    ax.errorbar(x, means, yerr=[lo, hi], color=AUGMP_RAMP[-2], marker='D', capsize=3, label='AugMP', zorder=4)
+    for xi, m in zip(x, means):
+        ret = f" ({m / full:.0%})" if full else ""
+        ax.annotate(f"{m:.1f}{ret}", (xi, m), textcoords='offset points', xytext=(0, 8), ha='center', fontsize=7)
+    if full:
+        ax.plot(x, [full * np.sqrt(f) for f in pf], color='grey', linestyle=':', label=r'full drop $\times\sqrt{p}$')
+    alie_full = [r for r in rows if r['attack'] == 'ALIE' and abs(r['frac'] - 1.0) < 1e-9 and r['param_fraction'] >= 1.0]
+    if alie_full:
+        ax.axhline(np.mean([r['drop_pp'] for r in alie_full]), color=C_ALIE, linestyle='--', label='ALIE (full observation)')
+    ax.set_ylim(0, max(max(means) * 1.18, 1.0))
+    ax.set_xlim(0, 118)
+    ax.set_xlabel('Parameters of each benign update observed by the attacker (%)')
+    ax.set_ylabel('Accuracy drop vs. benign setting (pp)')
+    ax.set_title('Attack effect vs. parameter-level observation')
+    ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.18), ncol=3, frameon=False, fontsize=8)
+    fig.savefig(out / 'observability_param_retention.png')
+    plt.close(fig)
+
+
 def plot_retention(plt, rows: List[dict], out: Path):
-    augmp = [r for r in rows if r['attack'] == 'AugMP' and not np.isnan(r['drop_pp'])]
+    augmp = [r for r in rows if r['attack'] == 'AugMP' and not np.isnan(r['drop_pp']) and r['param_fraction'] >= 1.0]
     if not augmp:
         return
     fig, ax = plt.subplots(figsize=(5.8, 4.2))
@@ -326,7 +379,7 @@ def plot_retention(plt, rows: List[dict], out: Path):
     if alie_full:
         ax.axhline(np.mean([r['drop_pp'] for r in alie_full]), color=C_ALIE, linestyle='--',
                    label='ALIE (full observation)')
-    alie_part = [r for r in rows if r['attack'] == 'ALIE' and r['frac'] < 1.0]
+    alie_part = [r for r in rows if r['attack'] == 'ALIE' and r['frac'] < 1.0 and r['param_fraction'] >= 1.0]
     if alie_part:
         ax.scatter([100 * r['frac'] for r in alie_part], [r['drop_pp'] for r in alie_part], color=C_ALIE,
                    marker='s', s=40, zorder=5, label='ALIE (limited observation)')
@@ -397,21 +450,25 @@ def main():
         bands = in_band_rates(r, args.at_round) if r.attack != 'benign' else {'sim_in_band': float('nan'), 'dist_in_band': float('nan')}
         dts = [v for v in dist_bound_series(r) if v is not None]
         es = early_stop_stats(r, results_dir) if r.attack != 'benign' else {}
+        ue = [v for v in unobserved_energy_series(r) if v is not None]
         rows.append({
             'name': r.name, 'attack': r.attack, 'k': r.k if r.k is not None else '', 'n_benign': r.n_benign,
             'frac': r.frac if r.frac is not None else float('nan'), 'mode': r.mode if r.attack != 'benign' else '',
             'variant': r.variant if r.attack != 'benign' else '',
             'obs_seed': '' if r.obs_seed is None else r.obs_seed, 'fixed_bounds': r.fixed_bounds,
+            'param_fraction': r.param_fraction if r.attack != 'benign' else float('nan'),
             'rounds_used': min(r.rounds[-1], args.at_round) if (r.rounds and args.at_round) else (r.rounds[-1] if r.rounds else 0),
             'acc_mean': a, 'drop_pp': 100 * (benign_acc - a) if r.attack != 'benign' else 0.0,
             'retention': float('nan'), 'sim_in_band': bands['sim_in_band'], 'dist_in_band': bands['dist_in_band'],
             'dT_median': statistics.median(dts) if dts else float('nan'),
             'early_stop_mean_step': es.get('early_stop_mean_step', float('nan')),
             'final_violations': es.get('final_violations', float('nan')),
+            'unobs_energy_median': statistics.median(ue) if ue else float('nan'),
         })
     # retention relative to the full-observation adaptive-bound run of the same attack
     for row in rows:
-        ref = [x for x in rows if x['attack'] == row['attack'] and abs(x['frac'] - 1.0) < 1e-9 and x['variant'] in ('fixed', '')]
+        ref = [x for x in rows if x['attack'] == row['attack'] and abs(x['frac'] - 1.0) < 1e-9
+               and x['variant'] in ('fixed', '') and not (x['param_fraction'] < 1.0)]
         if ref and row['attack'] != 'benign':
             ref_drop = float(np.mean([x['drop_pp'] for x in ref]))
             row['retention'] = row['drop_pp'] / ref_drop if ref_drop else float('nan')
@@ -424,13 +481,15 @@ def main():
             w.writerow(row)
 
     print(f"\nBenign reference accuracy: {benign_acc:.4f}  (window={args.window}, at_round={args.at_round})")
-    hdr = f"{'run':<58} {'variant':<26} {'k':>3} {'obs%':>5} {'acc':>7} {'drop':>6} {'ret':>6} {'simIB':>6} {'distIB':>6} {'dT':>7} {'steps':>6}"
+    hdr = f"{'run':<58} {'variant':<26} {'k':>3} {'obs%':>5} {'par%':>5} {'acc':>7} {'drop':>6} {'ret':>6} {'simIB':>6} {'distIB':>6} {'dT':>7} {'steps':>6} {'uE':>5}"
     print(hdr); print('-' * len(hdr))
     for row in sorted(rows, key=lambda x: (x['attack'] != 'benign', x['attack'], -x['frac'] if not np.isnan(x['frac']) else 0, x['fixed_bounds'])):
         f_ = lambda v, fmt: ('   -' if (isinstance(v, float) and np.isnan(v)) else format(v, fmt))
         print(f"{row['name']:<58} {row['variant']:<26} {str(row['k']):>3} {f_(100 * row['frac'], '5.0f') if not np.isnan(row['frac']) else '  -':>5} "
+              f"{f_(100 * row['param_fraction'], '5.0f') if not np.isnan(row['param_fraction']) else '  -':>5} "
               f"{f_(row['acc_mean'], '7.4f')} {f_(row['drop_pp'], '6.2f')} {f_(row['retention'], '6.2f')} "
-              f"{f_(row['sim_in_band'], '6.2f')} {f_(row['dist_in_band'], '6.2f')} {f_(row['dT_median'], '7.4f')} {f_(row['early_stop_mean_step'], '6.1f')}")
+              f"{f_(row['sim_in_band'], '6.2f')} {f_(row['dist_in_band'], '6.2f')} {f_(row['dT_median'], '7.4f')} {f_(row['early_stop_mean_step'], '6.1f')} "
+              f"{f_(row['unobs_energy_median'], '5.2f')}")
     print(f"\nSummary CSV: {csv_path}")
 
     if args.suggest_bounds:
@@ -453,6 +512,7 @@ def main():
         plt = style()
         plot_curves(plt, runs, out, args.at_round)
         plot_retention(plt, rows, out)
+        plot_param_retention(plt, rows, out)
         plot_dist_bound(plt, runs, out, args.at_round)
         print(f"Figures written to {out}/observability_*.png")
 

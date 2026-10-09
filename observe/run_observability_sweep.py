@@ -62,7 +62,7 @@ def parse_k(text: str):
 
 
 
-def build_overrides(args, attack, k, obs_seed):
+def build_overrides(args, attack, k, obs_seed, param_fraction=None):
     """Delegate to observe_config.make_config so the driver and the notebook share one pinned config."""
     extra = json.loads(args.extra) if args.extra else None
     cfg = make_config(
@@ -71,6 +71,7 @@ def build_overrides(args, attack, k, obs_seed):
         mode=args.mode, anchor=args.anchor, criterion=args.criterion, explore_rounds=args.explore_rounds,
         global_window=args.global_window, obs_seed=obs_seed, dist_bound=args.dist_bound,
         sim_bound_up=args.sim_bound_up, suffix=args.suffix, extra=extra,
+        param_fraction=param_fraction, param_fill=args.param_fill, param_mask_fixed=args.param_mask_fixed,
     )
     return cfg['experiment_name'], cfg
 
@@ -84,7 +85,8 @@ def run_one(name: str, cfg: dict, results_dir: Path, dry_run: bool) -> int:
                                  'attacker_observation_mode', 'attacker_observation_seed',
                                  'attacker_observation_criterion', 'attacker_observation_explore_rounds',
                                  'attacker_observation_anchor_global', 'attacker_observation_global_window',
-                                 'dist_bound', 'sim_bound_up') if k in cfg}
+                                 'attacker_observed_param_fraction', 'attacker_observed_param_fill',
+                                 'attacker_observed_param_mask_fixed', 'dist_bound', 'sim_bound_up') if k in cfg}
     print("  " + json.dumps(shown))
     print("=" * 78)
     if dry_run:
@@ -138,6 +140,12 @@ def main():
     ap.add_argument('--alpha', type=float, default=EXPERIMENT['alpha'], help='Dirichlet alpha')
     ap.add_argument('--seed', type=int, default=EXPERIMENT['seed'])
     ap.add_argument('--local-epochs', type=int, default=EXPERIMENT['local_epochs'])
+    ap.add_argument('--param-fraction', nargs='*', type=float, default=[None],
+                    help="parameter-level partial observation: share(s) p of each observed update's coordinates "
+                         "the attackers see (default: all); one run per value")
+    ap.add_argument('--param-fill', default='zero', choices=('zero', 'gaussian'),
+                    help="what the attackers see on hidden coordinates (default zero)")
+    ap.add_argument('--param-mask-fixed', action='store_true', help='one coordinate mask for the whole run (default: redrawn per round)')
     ap.add_argument('--dist-bound', type=float, default=None, help='freeze d_T (default: adaptive from observed updates)')
     ap.add_argument('--sim-bound-up', type=float, default=None, help='freeze the similarity upper bound')
     ap.add_argument('--suffix', default='', help='appended to experiment names')
@@ -157,7 +165,8 @@ def main():
             continue
         for k in args.k:
             for obs_seed in (args.obs_seed or [None]):
-                plan.append(build_overrides(args, attack, k, obs_seed))
+                for pf in (args.param_fraction or [None]):
+                    plan.append(build_overrides(args, attack, k, obs_seed, pf))
 
     # de-duplicate while keeping order (e.g. 'none' listed with several k)
     seen, ordered = set(), []

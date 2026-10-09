@@ -28,7 +28,14 @@ from typing import Optional
 #   alpha        Dirichlet heterogeneity (Qwen reference run / paper Fig. 3(c): 0.3)
 #   local_epochs local training epochs per round (Qwen reference run: 2)
 #   dist_bound / sim_bound_up   None = adaptive from the observed updates (paper); a float freezes it
+#   param_fraction  None = attackers see every coordinate of each observed update (paper). A float p in
+#                (0, 1] hides a random (1 - p) share of the coordinates of every observed benign update
+#                (same mask for all rows of a round, redrawn each round); the server still aggregates
+#                the complete updates. p = 1.0 is a no-op.
+#   param_fill   'zero' = hidden coordinates are unknown (0); 'gaussian' = RMS-matched noise (control)
+#   param_mask_fixed   True = one mask for the whole run instead of a fresh one per round
 # Examples:  make_config()                      the EXPERIMENT run itself
+#            make_config(param_fraction=0.2)    20% of the parameters of all 5 benign updates
 #            make_config(k=2)                   40% observation
 #            make_config(k=0)                   Secure Aggregation endpoint
 #            make_config(attack='none')         benign baseline
@@ -36,7 +43,7 @@ from typing import Optional
 # ================================================================================================
 EXPERIMENT = dict(
     # --- what the attackers may observe ---
-    k=2,
+    k=5,
     mode='fixed',
     anchor=False,
     obs_seed=None,
@@ -54,6 +61,10 @@ EXPERIMENT = dict(
     dataset='ag_news',        # key of DATASET_PRESETS
     alpha=0.3,
     local_epochs=2,
+    # --- parameter-level partial observation (None = off) ---
+    param_fraction=0.2,
+    param_fill='zero',
+    param_mask_fixed=False,
     # --- optional frozen bounds ---
     dist_bound=None,
     sim_bound_up=None,
@@ -159,6 +170,11 @@ def make_config(k=None, *, extra: Optional[dict] = None, **overrides) -> dict:
         raise ValueError(f"attack must be one of {ATTACK_CHOICES}, got {o['attack']!r}")
     if o['attackers'] >= o['clients']:
         raise ValueError(f"attackers ({o['attackers']}) must be smaller than clients ({o['clients']})")
+    pf = o['param_fraction']
+    if pf is not None and (isinstance(pf, bool) or not isinstance(pf, (int, float)) or not (0.0 < float(pf) <= 1.0)):
+        raise ValueError(f"param_fraction must be None or a number in (0, 1], got {pf!r}")
+    if o['param_fill'] not in ('zero', 'gaussian'):
+        raise ValueError(f"param_fill must be 'zero' or 'gaussian', got {o['param_fill']!r}")
 
     cfg = dict(FIXED)
     cfg.update(MODEL_PRESETS[o['model']])
@@ -191,6 +207,10 @@ def make_config(k=None, *, extra: Optional[dict] = None, **overrides) -> dict:
         cfg['attacker_observation_explore_rounds'] = o['explore_rounds']
         cfg['attacker_observation_anchor_global'] = bool(o['anchor'])
         cfg['attacker_observation_global_window'] = o['global_window']
+        if pf is not None:
+            cfg['attacker_observed_param_fraction'] = float(pf)
+            cfg['attacker_observed_param_fill'] = o['param_fill']
+            cfg['attacker_observed_param_mask_fixed'] = bool(o['param_mask_fixed'])
         if isinstance(kk, int) and kk == 0:
             name = f"obs_{model}_{dataset}_{attack.lower()}_k0of{n_benign}_secagg"
         else:
@@ -198,6 +218,12 @@ def make_config(k=None, *, extra: Optional[dict] = None, **overrides) -> dict:
             name = f"obs_{model}_{dataset}_{attack.lower()}_k{k_tag(kk)}of{n_benign}_{mode_tag}"
             if o['anchor']:
                 name += "_anchor"
+        if pf is not None and float(pf) < 1.0:
+            name += f"_p{k_tag(float(pf))}"
+            if o['param_fill'] != 'zero':
+                name += f"-{o['param_fill']}"
+            if o['param_mask_fixed']:
+                name += "-fixedmask"
         if o['obs_seed'] is not None:
             name += f"_os{o['obs_seed']}"
         name += f"_r{rounds}"
@@ -217,25 +243,43 @@ if __name__ == '__main__':
     # sanity: names follow one scheme, EXPERIMENT drives the defaults, FIXED never leaks a per-run knob
     e = EXPERIMENT_CONFIG
     print("EXPERIMENT_CONFIG:", e['experiment_name'])
-    assert e['experiment_name'] == 'obs_qwen_ag_news_augmp_k2of5_fixed_r50', e['experiment_name']
+    assert e['experiment_name'] == 'obs_qwen_ag_news_augmp_k5of5_fixed_p0p20_r50', e['experiment_name']
     assert e['num_clients'] == 7 and e['num_attackers'] == 2 and e['local_epochs'] == 2
     assert e['dirichlet_alpha'] == 0.3 and e['model_name'] == 'Qwen/Qwen2.5-0.5B'
     assert e['lambda_update_mode'] == 'alm' and e['dist_bound'] is None and e['sim_bound_up'] is None
     assert e['sim_bound_low'] is None and e['dim_reduction_size'] == 1000 and e['proxy_sample_size'] == 200
     assert not (set(FIXED) & {'num_clients', 'num_attackers', 'num_rounds', 'seed', 'dirichlet_alpha', 'local_epochs'})
-    a = make_config(k=2, mode='largest', anchor=True, rounds=30)
+    # name scheme for client-level runs (param_fraction=None so the check does not depend on EXPERIMENT)
+    a = make_config(k=2, mode='largest', anchor=True, rounds=30, param_fraction=None)
     assert a['experiment_name'] == 'obs_qwen_ag_news_augmp_k2of5_largest_anchor_r30', a['experiment_name']
-    assert make_config(k=0, rounds=30)['experiment_name'] == 'obs_qwen_ag_news_augmp_k0of5_secagg_r30'
-    assert make_config(k=2, obs_seed=1, rounds=30)['experiment_name'] == 'obs_qwen_ag_news_augmp_k2of5_fixed_os1_r30'
-    assert make_config(k=2, attack='ALIE', rounds=30)['experiment_name'] == 'obs_qwen_ag_news_alie_k2of5_fixed_r30'
+    assert make_config(k=0, rounds=30, param_fraction=None)['experiment_name'] == 'obs_qwen_ag_news_augmp_k0of5_secagg_r30'
+    assert make_config(k=2, obs_seed=1, rounds=30, param_fraction=None)['experiment_name'] == 'obs_qwen_ag_news_augmp_k2of5_fixed_os1_r30'
+    assert make_config(k=2, attack='ALIE', rounds=30, param_fraction=None)['experiment_name'] == 'obs_qwen_ag_news_alie_k2of5_fixed_r30'
     b = make_config(attack='none')
     assert b['experiment_name'] == 'obs_qwen_ag_news_benign_r50' and b['num_attackers'] == 0
     assert 'attacker_observed_benign' not in b
-    assert make_config(k=0.4, rounds=30)['experiment_name'] == 'obs_qwen_ag_news_augmp_k0p40of5_fixed_r30'
-    assert make_config(k=7, clients=10, attackers=3, model='distilbert')['experiment_name'] == 'obs_distilbert_ag_news_augmp_k7of7_fixed_r50'
-    assert make_config(local_epochs=5)['local_epochs'] == 5
+    assert make_config(k=0.4, rounds=30, param_fraction=None)['experiment_name'] == 'obs_qwen_ag_news_augmp_k0p40of5_fixed_r30'
+    assert make_config(k=7, clients=10, attackers=3, rounds=50, param_fraction=None)['experiment_name'] == 'obs_qwen_ag_news_augmp_k7of7_fixed_r50'
+    assert make_config(local_epochs=2)['local_epochs'] == 2
     assert make_config(k=2, dist_bound=0.5, sim_bound_up=0.3)['dist_bound'] == 0.5
     assert make_config(extra={'proxy_steps': 50})['proxy_steps'] == 50
+    # parameter-level partial observation
+    q = make_config(k=5, param_fraction=0.2, rounds=50)
+    assert q['experiment_name'] == 'obs_qwen_ag_news_augmp_k5of5_fixed_p0p20_r50', q['experiment_name']
+    assert q['attacker_observed_param_fraction'] == 0.2 and q['attacker_observed_param_fill'] == 'zero'
+    assert q['attacker_observed_param_mask_fixed'] is False and q['attacker_observed_benign'] == 5
+    assert make_config(k=5, param_fraction=0.6, param_fill='gaussian', param_mask_fixed=True)['experiment_name'] \
+        == 'obs_qwen_ag_news_augmp_k5of5_fixed_p0p60-gaussian-fixedmask_r50'
+    assert 'attacker_observed_param_fraction' not in make_config(k=5, param_fraction=None)  # None: off
+    assert make_config(k=5, param_fraction=1.0)['experiment_name'] == make_config(k=5, param_fraction=None)['experiment_name']  # p=1 -> same run name
+    assert 'attacker_observed_param_fraction' not in make_config(attack='none', param_fraction=0.2)  # benign ignores it
+    for bad in (dict(param_fraction=0.0), dict(param_fraction=2), dict(param_fill='noise')):
+        try:
+            make_config(k=5, **bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"make_config accepted {bad}")
     for bad in (dict(k=6), dict(bogus=1), dict(attack='foo'), dict(clients=2, attackers=2)):
         try:
             make_config(**bad)

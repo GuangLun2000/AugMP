@@ -549,11 +549,21 @@ class Server:
             observed_updates = [u for u, cid in zip(benign_updates, benign_client_ids) if cid in observed_set]
             observed_ids_for_attackers = [cid for cid in benign_client_ids if cid in observed_set]
             observed_log = list(observed_ids_for_attackers)
+            if getattr(self.observation_policy, 'param_partial', False):
+                # Parameter-level partial observation: the attackers get COPIES of the observed benign
+                # updates with a random share of the coordinates hidden (same mask for every row of the
+                # round). The originals in `benign_updates` / `initial_updates` are untouched, so the
+                # aggregation in Phase 4 below still uses the complete updates.
+                observed_updates = self.observation_policy.mask_updates(observed_updates, round_num)
             if pseudo_updates:
                 observed_updates = observed_updates + pseudo_updates
                 observed_ids_for_attackers = observed_ids_for_attackers + pseudo_ids
             mode_disp = 'secagg' if self.observation_policy.secagg else self.observation_policy.mode
             extra = f", + {len(pseudo_updates)} global-delta row(s)" if pseudo_updates else ""
+            if getattr(self.observation_policy, 'param_partial', False):
+                pol = self.observation_policy
+                extra += (f"; {pol.param_fraction:.0%} of each update's parameters "
+                          f"(fill={pol.param_fill}, {'fixed mask' if pol.param_mask_fixed else 'mask resampled per round'})")
             print(f"  👁️  Observability: attackers see {len(observed_log)}/{len(benign_updates)} benign updates "
                   f"(clients {observed_log}, mode={mode_disp}{extra})")
         # ==========================================================================================
@@ -654,6 +664,19 @@ class Server:
                 int(c.client_id): to_float(getattr(c, '_effective_dist_bound', None))
                 for c in self.clients if getattr(c, 'is_attacker', False)
             }
+            if getattr(self.observation_policy, 'param_partial', False):
+                # Parameter-level observation: how much of each submitted update's energy lies on the
+                # coordinates the attackers could NOT see this round (benign reference ~= 1 - p).
+                pol = self.observation_policy
+                round_log['observation_param_fraction'] = pol.param_fraction
+                round_log['observation_param_fill'] = pol.param_fill
+                round_log['attacker_unobserved_energy_frac'] = {
+                    int(cid): pol.unobserved_energy_fraction(final_updates[cid])
+                    for cid in sorted_client_ids if getattr(self.clients[cid], 'is_attacker', False)
+                }
+                benign_fracs = [pol.unobserved_energy_fraction(u) for u in benign_updates]
+                benign_fracs = [f for f in benign_fracs if f is not None]
+                round_log['benign_unobserved_energy_frac_mean'] = (sum(benign_fracs) / len(benign_fracs)) if benign_fracs else None
 
         self.log_data.append(round_log)
 
