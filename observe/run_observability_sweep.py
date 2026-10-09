@@ -6,15 +6,15 @@ Reviewer concern: in practice an adversary may observe only a subset of the beni
 This driver re-uses main.py unchanged (config overrides only) and launches every run in a fresh
 subprocess, so each run gets a clean CUDA context and its own log under results/observe/logs/.
 
-Ablation setting (pinned in observe/observe_config.py:STANDARD, override with CLI flags):
-  10 agents = 7 benign + 3 attackers (30% attackers, close to the paper's 2/7), Dirichlet 0.3,
-  20k AG News samples, DistilBERT + LoRA(r=8).  Attackers observe k of the 7 benign updates.
+Ablation setting (observe/observe_config.py:EXPERIMENT supplies every default, override with CLI flags):
+  paper setting 7 agents = 5 benign + 2 attackers, Dirichlet 0.3, 20k AG News samples,
+  DistilBERT + LoRA(r=8), 5 local epochs.  Attackers observe k of the 5 benign updates.
 
 Typical sequence (run from the repo root as `python observe/run_observability_sweep.py ...`):
   # 1) anchors at full observation (50 rounds): benign baseline, ALIE, AugMP
-  python observe/run_observability_sweep.py --attack none ALIE AugMP --k 7 --rounds 50
+  python observe/run_observability_sweep.py --attack none ALIE AugMP --k 5 --rounds 50
   # 2) observability sweep (30 rounds; compare with the anchors at round 30)
-  python observe/run_observability_sweep.py --k 4 3 2 --rounds 30
+  python observe/run_observability_sweep.py --k 3 2 --rounds 30
   # 3) a second observed subset at k=2 (subset variance)
   python observe/run_observability_sweep.py --k 2 --obs-seed 1 --rounds 30
   # 4) k=2 with d_T / sim_bound_up frozen at the full-observation values (isolates the GRL part)
@@ -42,8 +42,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))  # so `observe` is importable when run as `python observe/...`
 
 # Config is built by observe/observe_config.py (single source of truth; the Colab notebook uses the
-# same make_config()). STANDARD holds the pinned controlled variables; only observation keys vary.
-from observe.observe_config import (STANDARD, MODEL_PRESETS, DATASET_PRESETS, ATTACK_CHOICES,
+# same make_config()). EXPERIMENT supplies the defaults; FIXED holds the pinned hyper-parameters.
+from observe.observe_config import (EXPERIMENT, MODEL_PRESETS, DATASET_PRESETS, ATTACK_CHOICES,
                                     make_config, k_tag)
 
 
@@ -67,7 +67,7 @@ def build_overrides(args, attack, k, obs_seed):
     extra = json.loads(args.extra) if args.extra else None
     cfg = make_config(
         k, attack=attack, model=args.model, dataset=args.dataset, rounds=args.rounds,
-        seed=args.seed, alpha=args.alpha, clients=args.clients, attackers=args.attackers,
+        seed=args.seed, alpha=args.alpha, clients=args.clients, attackers=args.attackers, local_epochs=args.local_epochs,
         mode=args.mode, anchor=args.anchor, criterion=args.criterion, explore_rounds=args.explore_rounds,
         global_window=args.global_window, obs_seed=obs_seed, dist_bound=args.dist_bound,
         sim_bound_up=args.sim_bound_up, suffix=args.suffix, extra=extra,
@@ -80,7 +80,7 @@ def run_one(name: str, cfg: dict, results_dir: Path, dry_run: bool) -> int:
     print("\n" + "=" * 78)
     print(f"RUN {name}")
     shown = {k: cfg[k] for k in ('model_name', 'dataset', 'num_clients', 'num_attackers', 'num_rounds',
-                                 'dirichlet_alpha', 'attack_method', 'attacker_observed_benign',
+                                 'dirichlet_alpha', 'local_epochs', 'attack_method', 'attacker_observed_benign',
                                  'attacker_observation_mode', 'attacker_observation_seed',
                                  'attacker_observation_criterion', 'attacker_observation_explore_rounds',
                                  'attacker_observation_anchor_global', 'attacker_observation_global_window',
@@ -133,10 +133,11 @@ def main():
     ap.add_argument('--rounds', type=int, default=30)
     ap.add_argument('--model', default='distilbert', choices=sorted(MODEL_PRESETS))
     ap.add_argument('--dataset', default='ag_news', choices=sorted(DATASET_PRESETS))
-    ap.add_argument('--clients', type=int, default=STANDARD['num_clients'])
-    ap.add_argument('--attackers', type=int, default=STANDARD['num_attackers'])
-    ap.add_argument('--alpha', type=float, default=STANDARD['dirichlet_alpha'], help='Dirichlet alpha')
-    ap.add_argument('--seed', type=int, default=STANDARD['seed'])
+    ap.add_argument('--clients', type=int, default=EXPERIMENT['clients'])
+    ap.add_argument('--attackers', type=int, default=EXPERIMENT['attackers'])
+    ap.add_argument('--alpha', type=float, default=EXPERIMENT['alpha'], help='Dirichlet alpha')
+    ap.add_argument('--seed', type=int, default=EXPERIMENT['seed'])
+    ap.add_argument('--local-epochs', type=int, default=EXPERIMENT['local_epochs'])
     ap.add_argument('--dist-bound', type=float, default=None, help='freeze d_T (default: adaptive from observed updates)')
     ap.add_argument('--sim-bound-up', type=float, default=None, help='freeze the similarity upper bound')
     ap.add_argument('--suffix', default='', help='appended to experiment names')
