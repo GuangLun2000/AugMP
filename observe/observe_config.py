@@ -62,7 +62,7 @@ EXPERIMENT = dict(
     alpha=0.3,
     local_epochs=2,
     # --- parameter-level partial observation (None = off) ---
-    param_fraction=0.2,
+    param_fraction=0.8,
     param_fill='zero',
     param_mask_fixed=False,
     # --- optional frozen bounds ---
@@ -243,7 +243,7 @@ if __name__ == '__main__':
     # sanity: names follow one scheme, EXPERIMENT drives the defaults, FIXED never leaks a per-run knob
     e = EXPERIMENT_CONFIG
     print("EXPERIMENT_CONFIG:", e['experiment_name'])
-    assert e['experiment_name'] == 'obs_qwen_ag_news_augmp_k5of5_fixed_p0p20_r50', e['experiment_name']
+    assert e['experiment_name'] == 'obs_qwen_ag_news_augmp_k5of5_fixed_p0p80_r50', e['experiment_name']
     assert e['num_clients'] == 7 and e['num_attackers'] == 2 and e['local_epochs'] == 2
     assert e['dirichlet_alpha'] == 0.3 and e['model_name'] == 'Qwen/Qwen2.5-0.5B'
     assert e['lambda_update_mode'] == 'alm' and e['dist_bound'] is None and e['sim_bound_up'] is None
