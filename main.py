@@ -21,6 +21,7 @@ from client import BenignClient, AttackerClient
 from server import Server
 from visualization import ExperimentVisualizer
 from fed_checkpoint import save_global_model_checkpoint
+from observe.observability import build_observation_policy
 
 warnings.filterwarnings('ignore')
 
@@ -196,6 +197,12 @@ def setup_experiment(config):
             use_lora=False
         )
 
+    # 4b. Limited-observability ablation (opt-in, see observability.py).
+    #     None unless config['attacker_observed_benign'] is set -> original behaviour otherwise.
+    observation_policy = build_observation_policy(config)
+    if observation_policy is not None:
+        print(f"  Observability ablation enabled: {observation_policy.describe()}")
+
     # 5. Initialize Server
     server = Server(
         global_model=global_model,
@@ -203,7 +210,8 @@ def setup_experiment(config):
         total_rounds=config['num_rounds'],
         server_lr=config['server_lr'],
         dist_bound=config.get('dist_bound', config.get('d_T', 0.5)),  # Renamed from d_T
-        similarity_mode=config.get('server_similarity_mode', 'local_vs_global')
+        similarity_mode=config.get('server_similarity_mode', 'local_vs_global'),
+        observation_policy=observation_policy
     )
     # Manual cosine similarity bounds (None = use benign min/max)
     server.sim_bound_low = config.get('sim_bound_low', None)
@@ -963,6 +971,14 @@ def main(config_overrides: Optional[Dict] = None):
         'proxy_steps': 200,  # Number of optimization steps for AugMP proxy objective (int)
         'attacker_proxy_grad_clip_norm': 1.0,  # AugMP proxy-parameter update only; separate from benign training
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
+        # ----- Limited-observability ablation (opt-in; see observability.py / run_observability_sweep.py) -----
+        'attacker_observed_benign': None,  # None = attackers observe ALL benign updates (original behaviour). int k = observe k benign clients; float in (0,1] = observe that fraction
+        'attacker_observation_mode': 'fixed',  # 'fixed' = same subset every round (compromised peers / tapped links); 'random' = re-drawn each round; 'largest' = k benign clients with most data
+        'attacker_observation_seed': None,  # None = use config['seed'] to draw the observed subset (set e.g. 1, 2 for a different subset at the same k)
+        'attacker_observation_criterion': 'deviant',  # 'adaptive' mode only: lock onto the most 'deviant' (largest ||Δ_i-Δ_g||/||Δ_g||) or most 'representative' peers
+        'attacker_observation_explore_rounds': None,  # 'adaptive' mode only: rotation rounds before locking in (None = ceil(num_benign / k))
+        'attacker_observation_anchor_global': False,  # True = attackers also receive the previous broadcast update as pseudo client -1, weighted by the unobserved benign data mass
+        'attacker_observation_global_window': 5,  # Secure Aggregation (attacker_observed_benign=0): number of recent global-broadcast deltas used as pseudo benign rows
         'early_stop_constraint_stability_steps': 1,  # Early stopping: stop after N consecutive steps satisfying constraint (int)
 
         # ========== Formula 4 Constraint Parameters ==========

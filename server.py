@@ -8,6 +8,7 @@ from typing import List, Dict, Tuple
 import copy
 from client import BenignClient, AttackerClient
 import torch.nn.functional as F
+from observe.observability import to_float  # limited-observability ablation (opt-in)
 
 
 class Server:
@@ -15,7 +16,8 @@ class Server:
     def __init__(self, global_model: nn.Module, test_loader,
                 total_rounds=20, server_lr=0.8,
                 dist_bound=0.5,
-                similarity_mode='local_vs_global'):
+                similarity_mode='local_vs_global',
+                observation_policy=None):
         self.global_model = copy.deepcopy(global_model)
         self.test_loader = test_loader
         self.total_rounds = total_rounds
@@ -41,6 +43,10 @@ class Server:
         self.dist_bound = dist_bound  # Distance threshold for constraint (4b)
         self.sim_bound_low = None  # Manual lower bound for cosine similarity (None = use benign min)
         self.sim_bound_up = None   # Manual upper bound for cosine similarity (None = use benign mean)
+
+        # Limited-observability ablation (observability.ObservationPolicy).
+        # None (default) = attackers observe ALL benign updates, i.e. the original behaviour.
+        self.observation_policy = observation_policy
 
         # Track historical data
         self.history = {
@@ -451,6 +457,42 @@ class Server:
                 benign_data_sizes[client.client_id] = client_data_size
                 total_data_size += client_data_size
         
+        # ===== Limited-observability ablation (opt-in; no-op when observation_policy is None) =====
+        # The observed subset is deterministic per round (policy state only changes after Phase 4),
+        # so it is decided here and re-used in Phase 3. Two optional extras feed the attackers extra
+        # "pseudo benign" rows, built only from the global model they are broadcast anyway:
+        #   * Secure Aggregation (k == 0): the attackers observe NO benign update; instead they get a
+        #     window of recent global-broadcast deltas (ids -1, -2, ...), each weighted by an equal
+        #     share of the total benign data mass. This models an adversary that, under SecAgg, only
+        #     sees the aggregated global model.
+        #   * Global anchor (partial observation + anchor_global): one extra row = the previous
+        #     broadcast delta (id -1), weighted by the data mass of the UNOBSERVED benign clients.
+        observed_client_ids = None
+        pseudo_updates = []
+        pseudo_ids = []
+        attacker_benign_sizes = benign_data_sizes
+        if self.observation_policy is not None:
+            benign_ids_all = [c.client_id for c in self.clients if not getattr(c, 'is_attacker', False)]
+            observed_client_ids = self.observation_policy.select(benign_ids_all, round_num, data_sizes=benign_data_sizes)
+            total_benign_mass = float(sum(benign_data_sizes[cid] for cid in benign_ids_all))
+            history = list(getattr(self, '_global_delta_history', []))
+            anchor_id = self.observation_policy.ANCHOR_ID  # -1
+            if self.observation_policy.secagg and history:
+                window = history[-self.observation_policy.global_window:]
+                pseudo_updates = list(window)
+                pseudo_ids = [anchor_id - j for j in range(len(window))]  # -1, -2, ...
+                attacker_benign_sizes = dict(benign_data_sizes)
+                share = max(total_benign_mass / len(window), 1.0)
+                for pid in pseudo_ids:
+                    attacker_benign_sizes[pid] = share
+            elif self.observation_policy.anchor_global and not self.observation_policy.secagg and history:
+                pseudo_updates = [history[-1]]
+                pseudo_ids = [anchor_id]
+                unobserved_mass = float(sum(benign_data_sizes[cid] for cid in benign_ids_all if cid not in observed_client_ids))
+                attacker_benign_sizes = dict(benign_data_sizes)
+                attacker_benign_sizes[anchor_id] = max(unobserved_mass, 1.0)
+        # ==========================================================================================
+
         for client in self.clients:
             # Use is_attacker attribute instead of isinstance to support both AugMP and ALIE clients
             if getattr(client, 'is_attacker', False):
@@ -466,7 +508,7 @@ class Server:
                     sim_bound_low=getattr(self, 'sim_bound_low', None),
                     sim_bound_up=getattr(self, 'sim_bound_up', None),
                     total_data_size=total_data_size,
-                    benign_data_sizes=benign_data_sizes
+                    benign_data_sizes=attacker_benign_sizes  # == benign_data_sizes unless the global anchor is enabled
                 )
 
         # Phase 1: Preparation
@@ -496,6 +538,25 @@ class Server:
                 benign_client_ids.append(client_id)
         
         print(f"  Captured {len(benign_updates)} benign updates for camouflage.")
+
+        # ===== Limited-observability ablation (opt-in; no-op when observation_policy is None) =====
+        # Attackers are handed only the benign updates they are allowed to observe. Phase 4 below
+        # still aggregates ALL updates, so the ground-truth aggregation is untouched.
+        observed_updates, observed_ids_for_attackers = benign_updates, benign_client_ids
+        observed_log = None
+        if self.observation_policy is not None:
+            observed_set = set(observed_client_ids)
+            observed_updates = [u for u, cid in zip(benign_updates, benign_client_ids) if cid in observed_set]
+            observed_ids_for_attackers = [cid for cid in benign_client_ids if cid in observed_set]
+            observed_log = list(observed_ids_for_attackers)
+            if pseudo_updates:
+                observed_updates = observed_updates + pseudo_updates
+                observed_ids_for_attackers = observed_ids_for_attackers + pseudo_ids
+            mode_disp = 'secagg' if self.observation_policy.secagg else self.observation_policy.mode
+            extra = f", + {len(pseudo_updates)} global-delta row(s)" if pseudo_updates else ""
+            print(f"  👁️  Observability: attackers see {len(observed_log)}/{len(benign_updates)} benign updates "
+                  f"(clients {observed_log}, mode={mode_disp}{extra})")
+        # ==========================================================================================
         
         # ===== NEW: Store completed attacker updates for coordinated optimization =====
         completed_attacker_updates = {}  # {client_id: update_tensor}
@@ -508,7 +569,7 @@ class Server:
             client = self.clients[client_id]
             if getattr(client, 'is_attacker', False):
                 print(f"  ⚠️ Triggering camouflage logic for Client {client_id}")
-                client.receive_benign_updates(benign_updates, client_ids=benign_client_ids)
+                client.receive_benign_updates(observed_updates, client_ids=observed_ids_for_attackers)
                 
                 # ===== NEW: Pass completed attacker updates to current attacker =====
                 if completed_attacker_updates:
@@ -536,6 +597,19 @@ class Server:
         final_update_list = [final_updates[cid] for cid in sorted_client_ids]
         
         aggregation_log = self.aggregate_updates(final_update_list, sorted_client_ids)
+
+        if self.observation_policy is not None:
+            # What every client (attackers included) learns from the next broadcast:
+            # w_g(t+1) - w_g(t) = server_lr * aggregated update (global_params is a pre-aggregation copy).
+            global_delta = (self.global_model.get_flat_params().detach() - global_params.detach()).cpu()
+            hist = getattr(self, '_global_delta_history', None)
+            if hist is None:
+                from collections import deque
+                hist = deque(maxlen=max(1, int(getattr(self.observation_policy, 'global_window', 5))))
+                self._global_delta_history = hist
+            hist.append(global_delta)
+            if hasattr(self.observation_policy, 'observe_round'):
+                self.observation_policy.observe_round(round_num, observed_log, observed_updates[:len(observed_log)], global_delta)
 
         # Evaluate the global model (compute accuracy and loss together for efficiency)
         clean_acc, global_loss = self.evaluate_with_loss()
@@ -566,6 +640,20 @@ class Server:
             'server_lr': self.server_lr,
             'local_accuracies': local_accs_this_round
         }
+
+        if self.observation_policy is not None:
+            # Which benign clients the attackers observed this round, and the attacker-side
+            # effective distance bound d_T (auto-estimated from the observed subset when
+            # dist_bound=None). Used by plot_observability.py for the mechanism analysis.
+            round_log['observed_benign_clients'] = observed_log
+            round_log['observation_secagg'] = bool(getattr(self.observation_policy, 'secagg', False))
+            round_log['observation_num_pseudo_rows'] = len(pseudo_updates)
+            round_log['observation_anchor_global'] = bool(pseudo_updates) and not getattr(self.observation_policy, 'secagg', False)
+            round_log['observation_locked_ids'] = getattr(self.observation_policy, 'locked_ids', None)
+            round_log['attacker_dist_bounds'] = {
+                int(c.client_id): to_float(getattr(c, '_effective_dist_bound', None))
+                for c in self.clients if getattr(c, 'is_attacker', False)
+            }
 
         self.log_data.append(round_log)
 
