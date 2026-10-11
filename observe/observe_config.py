@@ -43,7 +43,7 @@ from typing import Optional
 # ================================================================================================
 EXPERIMENT = dict(
     # --- what the attackers may observe ---
-    k=3,
+    k=4,
     mode='fixed',
     anchor=False,
     obs_seed=None,
@@ -243,7 +243,7 @@ if __name__ == '__main__':
     # sanity: names follow one scheme, EXPERIMENT drives the defaults, FIXED never leaks a per-run knob
     e = EXPERIMENT_CONFIG
     print("EXPERIMENT_CONFIG:", e['experiment_name'])
-    assert e['experiment_name'] == 'obs_qwen_ag_news_augmp_k3of5_fixed_r50', e['experiment_name']
+    assert e['experiment_name'] == 'obs_qwen_ag_news_augmp_k4of5_fixed_r50', e['experiment_name']
     assert e['num_clients'] == 7 and e['num_attackers'] == 2 and e['local_epochs'] == 2
     assert e['dirichlet_alpha'] == 0.3 and e['model_name'] == 'Qwen/Qwen2.5-0.5B'
     assert e['lambda_update_mode'] == 'alm' and e['dist_bound'] is None and e['sim_bound_up'] is None
