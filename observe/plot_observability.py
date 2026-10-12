@@ -63,6 +63,7 @@ class Run:
     fixed_bounds: bool
     criterion: str
     anchor: bool
+    anchor_mode: Optional[str] = None   # 'global' | 'residual' when anchor rows are used
     rounds: List[int]
     acc: List[float]
     logs: List[dict]
@@ -88,7 +89,7 @@ class Run:
         if self.mode != 'fixed':
             parts.append(self.mode + (f'-{self.criterion}' if self.mode == 'adaptive' else ''))
         if self.anchor:
-            parts.append('anchor')
+            parts.append('anchor-res' if self.anchor_mode == 'residual' else 'anchor')
         if self.fixed_bounds:
             parts.append('fixed-bounds')
         if self.param_fraction < 1.0:
@@ -143,6 +144,8 @@ def load_run(path: str) -> Run:
         fixed_bounds=(attack != 'benign' and cfg.get('dist_bound', None) is not None),
         criterion=str(cfg.get('attacker_observation_criterion', 'deviant') or 'deviant'),
         anchor=bool(cfg.get('attacker_observation_anchor_global', False)),
+        anchor_mode=('residual' if cfg.get('attacker_observation_anchor_global') == 'residual'
+                     else ('global' if cfg.get('attacker_observation_anchor_global') else None)),
         rounds=list(pm.get('rounds', [])), acc=list(pm.get('clean_acc', [])), logs=list(d.get('results', [])),
         attacker_ids=list(range(n_ben, n_cli)),
         param_fraction=float(cfg.get('attacker_observed_param_fraction', None) or 1.0) if attack != 'benign' else 1.0,

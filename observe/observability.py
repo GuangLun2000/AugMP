@@ -67,6 +67,12 @@ class ObservationPolicy:
                        update as an extra pseudo benign row (client id -1) whose aggregation weight
                        is the data mass of the UNOBSERVED benign clients. This re-centres the
                        attacker's aggregate estimate and constraint statistics on the true global.
+                       'residual' hands over TWO pseudo rows instead: the previous broadcast delta
+                       (id -1, negligible weight: it only feeds the graph and the similarity band)
+                       and the residual (id -2, weight = unobserved benign mass) = previous
+                       broadcast delta minus the attackers' own previous updates and the observed
+                       peers' previous updates, rescaled to the weighted mean update of the
+                       UNOBSERVED benign clients. Everything used is known to the attackers.
         param_fraction: None (default, off) or p in (0, 1]: share of each observed benign update's
                        coordinates the attackers see (parameter-level partial observation).
         param_fill: 'zero' (hidden coordinates = 0) or 'gaussian' (RMS-matched noise per update).
@@ -77,7 +83,9 @@ class ObservationPolicy:
     MODES = ('fixed', 'random', 'largest', 'adaptive')
     CRITERIA = ('deviant', 'representative')
     FILLS = ('zero', 'gaussian')
+    ANCHOR_MODES = ('global', 'residual')
     ANCHOR_ID = -1
+    RESIDUAL_ID = -2
     _MASK_STREAM = 7919  # private RNG stream id for coordinate masks (never the global RNG)
 
     def __init__(self, num_observed: Number, mode: str = 'fixed', seed: int = 0,
@@ -106,12 +114,19 @@ class ObservationPolicy:
                 raise ValueError(f"attacker_observed_param_fraction must lie in (0, 1], got {param_fraction}")
         if param_fill not in self.FILLS:
             raise ValueError(f"attacker_observed_param_fill must be one of {self.FILLS}, got {param_fill!r}")
+        if isinstance(anchor_global, str):
+            if anchor_global not in self.ANCHOR_MODES:
+                raise ValueError(f"attacker_observation_anchor_global must be bool or one of {self.ANCHOR_MODES}, got {anchor_global!r}")
+            anchor_mode = anchor_global
+        else:
+            anchor_mode = 'global' if anchor_global else None
         self.num_observed = num_observed
         self.mode = mode
         self.seed = int(seed)
         self.criterion = criterion
         self.explore_rounds = None if explore_rounds is None else int(explore_rounds)
-        self.anchor_global = bool(anchor_global)
+        self.anchor_global = anchor_mode is not None   # True for both anchor modes (server hook / logs)
+        self.anchor_mode = anchor_mode                  # None | 'global' | 'residual'
         self.global_window = int(global_window)
         # Secure Aggregation endpoint: k == 0 means the attacker observes NO individual benign update
         # and may only use the global model it is broadcast each round (handled server-side as a window
@@ -304,7 +319,9 @@ class ObservationPolicy:
         s = f"attackers observe {amount}, mode={self.mode}"
         if self.mode == 'adaptive':
             s += f" (criterion={self.criterion}, explore_rounds={self.explore_rounds or 'auto'})"
-        if self.anchor_global:
+        if self.anchor_mode == 'residual':
+            s += ", + global-broadcast anchor rows (previous delta + unobserved-peer residual)"
+        elif self.anchor_global:
             s += ", + global-broadcast anchor row"
         s += f", seed={self.seed}"
         if self.param_partial:
@@ -330,7 +347,7 @@ def build_observation_policy(config: dict) -> Optional[ObservationPolicy]:
         value, mode=mode, seed=seed,
         criterion=config.get('attacker_observation_criterion', 'deviant') or 'deviant',
         explore_rounds=config.get('attacker_observation_explore_rounds', None),
-        anchor_global=bool(config.get('attacker_observation_anchor_global', False)),
+        anchor_global=config.get('attacker_observation_anchor_global', False) or False,
         global_window=int(config.get('attacker_observation_global_window', 5) or 5),
         param_fraction=param_fraction,
         param_fill=config.get('attacker_observed_param_fill', 'zero') or 'zero',
@@ -389,7 +406,15 @@ if __name__ == '__main__':
     cfg = {'seed': 3, 'attacker_observed_benign': 2, 'attacker_observation_mode': 'adaptive',
            'attacker_observation_anchor_global': True, 'attacker_observation_explore_rounds': 5}
     bp = build_observation_policy(cfg)
-    assert bp.seed == 3 and bp.anchor_global and bp.explore_rounds == 5 and bp.mode == 'adaptive'
+    assert bp.seed == 3 and bp.anchor_global and bp.anchor_mode == 'global' and bp.explore_rounds == 5 and bp.mode == 'adaptive'
+    rs = build_observation_policy({'seed': 3, 'attacker_observed_benign': 1, 'attacker_observation_anchor_global': 'residual'})
+    assert rs.anchor_global and rs.anchor_mode == 'residual' and rs.select(ids, 0) == [rs.select(ids, 0)[0]] and 'residual' in rs.describe()
+    assert build_observation_policy({'seed': 3, 'attacker_observed_benign': 2}).anchor_mode is None
+    assert not ObservationPolicy(2, 'fixed').anchor_global
+    try:
+        ObservationPolicy(2, 'fixed', anchor_global='foo'); assert False
+    except ValueError:
+        pass
     assert build_observation_policy({'seed': 3}) is None
     assert to_float(None) is None and to_float(1.5) == 1.5
     # Secure Aggregation endpoint: k = 0 observes nothing

@@ -20,7 +20,9 @@ from typing import Optional
 #   k            benign updates the attackers observe per round: int count | 0 = Secure Aggregation
 #                (k=1 is degenerate: the VGAE graph needs >= 2 observed updates, auto d_T -> 0)
 #   mode         'fixed' (same peers every round) | 'random' | 'largest' | 'adaptive'
-#   anchor       also feed the previous global-broadcast delta as pseudo client -1
+#   anchor       False | True ('global': previous broadcast delta as pseudo client -1, weight = unobserved
+#                mass) | 'residual' (two pseudo rows: previous delta with negligible weight + the recovered
+#                mean update of the unobserved peers, weight = unobserved mass; makes k=1 non-degenerate)
 #   obs_seed     seed for drawing the observed subset (None = seed)
 #   attack       'AugMP' | 'ALIE' | 'Gaussian' | 'SignFlipping' | 'none' (benign baseline, k ignored)
 #   clients / attackers   paper setting: 7 agents = 5 benign + 2 attackers
@@ -43,9 +45,9 @@ from typing import Optional
 # ================================================================================================
 EXPERIMENT = dict(
     # --- what the attackers may observe ---
-    k=5,
+    k=1,
     mode='fixed',
-    anchor=False,
+    anchor='residual',
     obs_seed=None,
     criterion='deviant',      # 'adaptive' mode only: 'deviant' | 'representative'
     explore_rounds=None,      # 'adaptive' mode only: rotation rounds before locking in
@@ -62,7 +64,7 @@ EXPERIMENT = dict(
     alpha=0.3,
     local_epochs=2,
     # --- parameter-level partial observation (None = off) ---
-    param_fraction=0.6,
+    param_fraction=None,
     param_fill='zero',
     param_mask_fixed=False,
     # --- optional frozen bounds ---
@@ -175,6 +177,8 @@ def make_config(k=None, *, extra: Optional[dict] = None, **overrides) -> dict:
         raise ValueError(f"param_fraction must be None or a number in (0, 1], got {pf!r}")
     if o['param_fill'] not in ('zero', 'gaussian'):
         raise ValueError(f"param_fill must be 'zero' or 'gaussian', got {o['param_fill']!r}")
+    if o['anchor'] not in (False, True, 'global', 'residual'):
+        raise ValueError(f"anchor must be False, True, 'global' or 'residual', got {o['anchor']!r}")
 
     cfg = dict(FIXED)
     cfg.update(MODEL_PRESETS[o['model']])
@@ -205,7 +209,7 @@ def make_config(k=None, *, extra: Optional[dict] = None, **overrides) -> dict:
         cfg['attacker_observation_seed'] = o['obs_seed']
         cfg['attacker_observation_criterion'] = o['criterion']
         cfg['attacker_observation_explore_rounds'] = o['explore_rounds']
-        cfg['attacker_observation_anchor_global'] = bool(o['anchor'])
+        cfg['attacker_observation_anchor_global'] = ('residual' if o['anchor'] == 'residual' else bool(o['anchor']))
         cfg['attacker_observation_global_window'] = o['global_window']
         if pf is not None:
             cfg['attacker_observed_param_fraction'] = float(pf)
@@ -216,7 +220,9 @@ def make_config(k=None, *, extra: Optional[dict] = None, **overrides) -> dict:
         else:
             mode_tag = o['mode'] + (f"-{o['criterion']}" if o['mode'] == 'adaptive' else '')
             name = f"obs_{model}_{dataset}_{attack.lower()}_k{k_tag(kk)}of{n_benign}_{mode_tag}"
-            if o['anchor']:
+            if o['anchor'] == 'residual':
+                name += "_anchorres"
+            elif o['anchor']:
                 name += "_anchor"
         if pf is not None and float(pf) < 1.0:
             name += f"_p{k_tag(float(pf))}"
@@ -243,7 +249,7 @@ if __name__ == '__main__':
     # sanity: names follow one scheme, EXPERIMENT drives the defaults, FIXED never leaks a per-run knob
     e = EXPERIMENT_CONFIG
     print("EXPERIMENT_CONFIG:", e['experiment_name'])
-    assert e['experiment_name'] == 'obs_qwen_ag_news_augmp_k5of5_fixed_p0p60_r50', e['experiment_name']
+    assert e['experiment_name'] == 'obs_qwen_ag_news_augmp_k1of5_fixed_anchorres_r50', e['experiment_name']
     assert e['num_clients'] == 7 and e['num_attackers'] == 2 and e['local_epochs'] == 2
     assert e['dirichlet_alpha'] == 0.3 and e['model_name'] == 'Qwen/Qwen2.5-0.5B'
     assert e['lambda_update_mode'] == 'alm' and e['dist_bound'] is None and e['sim_bound_up'] is None
@@ -275,6 +281,18 @@ if __name__ == '__main__':
     assert 'attacker_observed_param_fraction' not in mc(k=5)                         # None: off
     assert mc(k=5, param_fraction=1.0)['experiment_name'] == mc(k=5)['experiment_name']  # p=1 -> same run name
     assert 'attacker_observed_param_fraction' not in mc(attack='none', param_fraction=0.2)  # benign ignores it
+    # residual anchor (k=1 point)
+    r1 = mc(k=1, anchor='residual', rounds=50)
+    assert r1['experiment_name'] == 'obs_qwen_ag_news_augmp_k1of5_fixed_anchorres_r50', r1['experiment_name']
+    assert r1['attacker_observation_anchor_global'] == 'residual' and r1['attacker_observed_benign'] == 1
+    assert mc(k=2, anchor=True, rounds=50)['attacker_observation_anchor_global'] is True
+    assert mc(k=2, anchor=False, rounds=50)['attacker_observation_anchor_global'] is False
+    try:
+        mc(k=2, anchor='foo')
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("make_config accepted anchor='foo'")
     for bad in (dict(param_fraction=0.0), dict(param_fraction=2), dict(param_fill='noise')):
         try:
             make_config(k=5, **bad)

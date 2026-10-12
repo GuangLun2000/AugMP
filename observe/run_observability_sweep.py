@@ -126,8 +126,9 @@ def main():
                     help="adaptive mode: lock onto the most deviant or the most representative peers")
     ap.add_argument('--explore-rounds', type=int, default=None,
                     help="adaptive mode: rotation rounds before locking in (default ceil(benign / k))")
-    ap.add_argument('--anchor', action='store_true',
-                    help="also hand attackers the previous broadcast update as an anchor row (pseudo client -1)")
+    ap.add_argument('--anchor', nargs='?', const=True, default=False, choices=[True, 'global', 'residual'],
+                    help="anchor rows from the global broadcast: --anchor (previous delta, pseudo client -1) or "
+                         "--anchor residual (previous delta + recovered unobserved-peer mean; makes k=1 usable)")
     ap.add_argument('--global-window', type=int, default=5,
                     help="SecAgg (--k 0): number of recent global-broadcast deltas used as pseudo benign rows")
     ap.add_argument('--obs-seed', nargs='*', type=int, default=[None],

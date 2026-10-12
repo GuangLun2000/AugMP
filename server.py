@@ -485,6 +485,35 @@ class Server:
                 share = max(total_benign_mass / len(window), 1.0)
                 for pid in pseudo_ids:
                     attacker_benign_sizes[pid] = share
+            elif (getattr(self.observation_policy, 'anchor_mode', None) == 'residual' and not self.observation_policy.secagg
+                  and history and getattr(self, '_prev_round_cache', None) is not None):
+                # Residual anchor (two pseudo rows, both computable by the attackers from what they know):
+                #   id -1: previous broadcast delta g_{t-1} (negligible weight -> graph / similarity band only)
+                #   id -2: weighted MEAN update of the UNOBSERVED benign clients in round t-1, recovered as
+                #          (g_{t-1}/server_lr - sum_att w_a*w_a^{t-1} - sum_obs w_u*Delta_u^{t-1}) / w_unobs,
+                #          with w_i = D_i / D_total (the server's FedAvg weights); weight = unobserved mass.
+                prev = self._prev_round_cache
+                g_prev = history[-1].to(torch.float32)
+                agg_prev = g_prev / float(self.server_lr)
+                D_total_prev = float(prev['D_total'])
+                resid = agg_prev.clone()
+                for cid, upd in prev['attacker_updates'].items():
+                    resid -= (float(prev['attacker_sizes'][cid]) / D_total_prev) * upd.to(torch.float32)
+                for cid, upd in zip(prev['observed_ids'], prev['observed_updates']):
+                    resid -= (float(prev['benign_sizes'][cid]) / D_total_prev) * upd.to(torch.float32)
+                unobs_prev = float(sum(prev['benign_sizes'][cid] for cid in prev['benign_ids'] if cid not in set(prev['observed_ids'])))
+                if unobs_prev > 0:
+                    resid = resid / (unobs_prev / D_total_prev)
+                unobserved_mass = float(sum(benign_data_sizes[cid] for cid in benign_ids_all if cid not in observed_client_ids))
+                pseudo_updates = [history[-1], resid.to(history[-1].dtype)]
+                pseudo_ids = [anchor_id, self.observation_policy.RESIDUAL_ID]
+                attacker_benign_sizes = dict(benign_data_sizes)
+                attacker_benign_sizes[anchor_id] = 1.0                       # negligible in every weighted quantity
+                attacker_benign_sizes[self.observation_policy.RESIDUAL_ID] = max(unobserved_mass, 1.0)
+                if prev.get('unobserved_mean') is not None:                  # server-side diagnostic only
+                    exact = prev['unobserved_mean'].to(torch.float32)
+                    rel = float(torch.norm(resid - exact) / (torch.norm(exact) + 1e-12))
+                    print(f"  [residual anchor] rel. error of the recovered unobserved-peer mean vs exact: {rel:.2e}")
             elif self.observation_policy.anchor_global and not self.observation_policy.secagg and history:
                 pseudo_updates = [history[-1]]
                 pseudo_ids = [anchor_id]
@@ -620,6 +649,27 @@ class Server:
             hist.append(global_delta)
             if hasattr(self.observation_policy, 'observe_round'):
                 self.observation_policy.observe_round(round_num, observed_log, observed_updates[:len(observed_log)], global_delta)
+            if getattr(self.observation_policy, 'anchor_mode', None) == 'residual':
+                # What the attackers knew in this round, kept for next round's residual anchor:
+                # the observed benign rows exactly as they were handed over (masked copies if any),
+                # the attackers' own submitted updates, and the FedAvg sizes. `unobserved_mean` is the
+                # exact server-side value, stored only to print a diagnostic error next round.
+                n_obs = len(observed_log)
+                att_ids = [cid for cid in sorted_client_ids if getattr(self.clients[cid], 'is_attacker', False)]
+                unobs_ids = [cid for cid in benign_client_ids if cid not in set(observed_log)]
+                unobs_mean = None
+                if unobs_ids:
+                    wts = torch.tensor([benign_data_sizes[cid] for cid in unobs_ids], dtype=torch.float32)
+                    stack = torch.stack([initial_updates[cid].detach().to(torch.float32).cpu() for cid in unobs_ids])
+                    unobs_mean = (stack * (wts / wts.sum()).view(-1, 1)).sum(dim=0)
+                self._prev_round_cache = {
+                    'observed_ids': list(observed_log),
+                    'observed_updates': [u.detach().to(torch.float32).cpu() for u in observed_updates[:n_obs]],
+                    'attacker_updates': {cid: final_updates[cid].detach().to(torch.float32).cpu() for cid in att_ids},
+                    'attacker_sizes': {cid: float(getattr(self.clients[cid], 'claimed_data_size', 1.0)) for cid in att_ids},
+                    'benign_sizes': dict(benign_data_sizes), 'benign_ids': list(benign_client_ids),
+                    'D_total': float(total_data_size), 'unobserved_mean': unobs_mean,
+                }
 
         # Evaluate the global model (compute accuracy and loss together for efficiency)
         clean_acc, global_loss = self.evaluate_with_loss()
@@ -659,6 +709,7 @@ class Server:
             round_log['observation_secagg'] = bool(getattr(self.observation_policy, 'secagg', False))
             round_log['observation_num_pseudo_rows'] = len(pseudo_updates)
             round_log['observation_anchor_global'] = bool(pseudo_updates) and not getattr(self.observation_policy, 'secagg', False)
+            round_log['observation_anchor_mode'] = getattr(self.observation_policy, 'anchor_mode', None)
             round_log['observation_locked_ids'] = getattr(self.observation_policy, 'locked_ids', None)
             round_log['attacker_dist_bounds'] = {
                 int(c.client_id): to_float(getattr(c, '_effective_dist_bound', None))
