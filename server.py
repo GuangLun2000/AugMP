@@ -9,6 +9,7 @@ import copy
 from client import BenignClient, AttackerClient
 import torch.nn.functional as F
 from observe.observability import to_float  # limited-observability ablation (opt-in)
+from observe.overhead import StageClock, build_round_overhead, format_round_overhead  # per-round overhead (opt-in)
 
 
 class Server:
@@ -17,7 +18,8 @@ class Server:
                 total_rounds=20, server_lr=0.8,
                 dist_bound=0.5,
                 similarity_mode='local_vs_global',
-                observation_policy=None):
+                observation_policy=None,
+                profile_overhead=False):
         self.global_model = copy.deepcopy(global_model)
         self.test_loader = test_loader
         self.total_rounds = total_rounds
@@ -47,6 +49,9 @@ class Server:
         # Limited-observability ablation (observability.ObservationPolicy).
         # None (default) = attackers observe ALL benign updates, i.e. the original behaviour.
         self.observation_policy = observation_policy
+
+        # Per-round overhead accounting (observe/overhead.py). False (default) = no timing code runs.
+        self.profile_overhead = bool(profile_overhead)
 
         # Track historical data
         self.history = {
@@ -439,8 +444,14 @@ class Server:
         print(f"Current Parameters: server_lr={self.server_lr:.2f}")
         print(f"{'=' * 60}")
 
+        # Opt-in overhead accounting: the begin/end pairs below are no-ops unless profile_overhead is on.
+        clock = StageClock(self.profile_overhead, self.device)
+        attacker_reports = {}
+        clock.start_total()
+
         # Broadcast the model
         print("📡 Broadcasting the global model...")
+        clock.begin('broadcast')
         self.broadcast_model()
         
         # Set global model params and constraint parameters for attackers (Formula 4)
@@ -540,19 +551,25 @@ class Server:
                     benign_data_sizes=attacker_benign_sizes  # == benign_data_sizes unless the global anchor is enabled
                 )
 
+        clock.end('broadcast')
+
         # Phase 1: Preparation
         print("\n🔧 Phase 1: Client Preparation")
+        clock.begin('prepare')
         for client in self.clients:
             client.set_round(round_num)
             # Use is_attacker attribute instead of isinstance to support both AugMP and ALIE clients
             if getattr(client, 'is_attacker', False):
                 client.prepare_for_round(round_num)
+        clock.end('prepare')
 
         # Phase 2: Local Training
         print("\n💪 Phase 2: Local Training")
         initial_updates = {}
         for client in self.clients:
+            clock.begin(f'train:{client.client_id}')
             update = client.local_train()
+            clock.end(f'train:{client.client_id}')
             initial_updates[client.client_id] = update
             print(f"  ✓ Client {client.client_id} completed training")
 
@@ -619,8 +636,12 @@ class Server:
                     )
                 # ====================================================================
                 
+                clock.begin(f'attack:{client_id}', memory=False)  # time only; the client tracks its own stages
                 final_updates[client_id] = client.camouflage_update(update)
-                
+                clock.end(f'attack:{client_id}')
+                if clock.enabled:
+                    attacker_reports[client_id] = getattr(client, 'last_overhead', None)
+
                 # ===== NEW: Store current attacker's update for subsequent attackers =====
                 completed_attacker_updates[client_id] = final_updates[client_id]
                 completed_attacker_client_ids.append(client_id)
@@ -635,8 +656,11 @@ class Server:
         sorted_client_ids = sorted(final_updates.keys())
         final_update_list = [final_updates[cid] for cid in sorted_client_ids]
         
+        clock.begin('aggregate')
         aggregation_log = self.aggregate_updates(final_update_list, sorted_client_ids)
+        clock.end('aggregate')
 
+        clock.begin('observe')  # limited-observability bookkeeping (empty unless the policy is on)
         if self.observation_policy is not None:
             # What every client (attackers included) learns from the next broadcast:
             # w_g(t+1) - w_g(t) = server_lr * aggregated update (global_params is a pre-aggregation copy).
@@ -671,10 +695,15 @@ class Server:
                     'D_total': float(total_data_size), 'unobserved_mean': unobs_mean,
                 }
 
+        clock.end('observe')
+
         # Evaluate the global model (compute accuracy and loss together for efficiency)
+        clock.begin('eval_global')
         clean_acc, global_loss = self.evaluate_with_loss()
-        
+        clock.end('eval_global')
+
         # Evaluate local accuracies for each client
+        clock.begin('eval_local')  # experiment bookkeeping (local-accuracy figure), not part of the protocol
         local_accs_this_round = {}
         for client in self.clients:
             try:
@@ -688,6 +717,7 @@ class Server:
             except Exception as e:
                 # Skip if evaluation fails (e.g., empty data loader)
                 print(f"  ⚠️  Could not evaluate local accuracy for client {client.client_id}: {e}")
+        clock.end('eval_local')
 
         # Create log for the current round
         round_log = {
@@ -728,6 +758,15 @@ class Server:
                 benign_fracs = [pol.unobserved_energy_fraction(u) for u in benign_updates]
                 benign_fracs = [f for f in benign_fracs if f is not None]
                 round_log['benign_unobserved_energy_frac_mean'] = (sum(benign_fracs) / len(benign_fracs)) if benign_fracs else None
+
+        if clock.enabled:
+            clock.stop_total()
+            all_ids = [c.client_id for c in self.clients]
+            att_ids = [c.client_id for c in self.clients if getattr(c, 'is_attacker', False)]
+            round_log['overhead'] = build_round_overhead(clock, all_ids, att_ids, attacker_reports)
+            print()
+            for line in format_round_overhead(round_log['overhead'], round_num + 1, att_ids):
+                print(line)
 
         self.log_data.append(round_log)
 

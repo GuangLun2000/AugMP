@@ -3,6 +3,7 @@
 
 import sys
 import subprocess
+import time
 import torch
 import torch.nn as nn
 import numpy as np
@@ -22,6 +23,7 @@ from server import Server
 from visualization import ExperimentVisualizer
 from fed_checkpoint import save_global_model_checkpoint
 from observe.observability import build_observation_policy
+from observe.overhead import print_overhead_summary  # per-round overhead table (opt-in: profile_overhead)
 
 warnings.filterwarnings('ignore')
 
@@ -211,7 +213,8 @@ def setup_experiment(config):
         server_lr=config['server_lr'],
         dist_bound=config.get('dist_bound', config.get('d_T', 0.5)),  # Renamed from d_T
         similarity_mode=config.get('server_similarity_mode', 'local_vs_global'),
-        observation_policy=observation_policy
+        observation_policy=observation_policy,
+        profile_overhead=config.get('profile_overhead', False)
     )
     # Manual cosine similarity bounds (None = use benign min/max)
     server.sim_bound_low = config.get('sim_bound_low', None)
@@ -377,7 +380,8 @@ def setup_experiment(config):
                 grad_clip_norm=config['grad_clip_norm'],
                 proxy_grad_clip_norm=config.get('attacker_proxy_grad_clip_norm', 1.0),
                 early_stop_constraint_stability_steps=config.get('early_stop_constraint_stability_steps', 3),
-                use_proxy_data=use_proxy
+                use_proxy_data=use_proxy,
+                profile_overhead=config.get('profile_overhead', False)
             )
             
             # Set Lagrangian Dual parameters (if using)
@@ -490,6 +494,8 @@ def run_downstream_task2_if_configured(config: Dict, results_dir: Path) -> None:
 
 # Run the experiment
 def run_experiment(config):
+    profile = bool(config.get('profile_overhead', False))  # opt-in per-round overhead accounting
+    t_experiment_start = time.perf_counter()
     server, results_dir = setup_experiment(config)
 
     # Initial evaluation
@@ -508,6 +514,7 @@ def run_experiment(config):
         'agg_update_norm': []
     }
 
+    t_rounds_start = time.perf_counter()
     try:
         for round_num in range(config['num_rounds']):
             round_log = server.run_round(round_num)
@@ -530,6 +537,16 @@ def run_experiment(config):
         import traceback
         traceback.print_exc()
 
+    t_rounds_end = time.perf_counter()
+    overhead_totals = None
+    if profile:
+        overhead_totals = {
+            'setup_and_initial_eval_sec': t_rounds_start - t_experiment_start,
+            'rounds_sec': t_rounds_end - t_rounds_start,
+            'experiment_sec': t_rounds_end - t_experiment_start,
+            'rounds_completed': len(server.log_data),
+        }
+
     # Save results
     results_data = {
         'config': config,
@@ -537,6 +554,8 @@ def run_experiment(config):
         'progressive_metrics': progressive_metrics,
         'local_accuracies': server.history['local_accuracies']  # Include local accuracies
     }
+    if overhead_totals is not None:
+        results_data['overhead_totals'] = overhead_totals
 
     results_path = results_dir / f"{config['experiment_name']}_results.json"
     with open(results_path, 'w') as f:
@@ -547,10 +566,14 @@ def run_experiment(config):
     # Print detailed statistics for data collection
     attacker_ids = [client.client_id for client in server.clients 
                    if getattr(client, 'is_attacker', False)]
-    print_detailed_statistics(server.log_data, progressive_metrics, 
-                            server.history['local_accuracies'], attacker_ids, 
+    print_detailed_statistics(server.log_data, progressive_metrics,
+                            server.history['local_accuracies'], attacker_ids,
                             config['experiment_name'], results_dir)
-    
+    if profile:
+        # Per-round / per-component overhead table + CSVs (reviewer request). Read-only over server.log_data.
+        print_overhead_summary(server.log_data, attacker_ids, totals=overhead_totals,
+                               results_dir=results_dir, experiment_name=config['experiment_name'])
+
     # Generate visualizations
     print("\n" + "=" * 60)
     print("Generating Visualization Plots")
@@ -573,7 +596,12 @@ def run_experiment(config):
     save_global_model_checkpoint(server, config, results_dir)
 
     run_downstream_task2_if_configured(config, results_dir)
-    
+
+    if profile:
+        print(f"\n⏱️  Total wall-clock incl. figures/checkpoint/downstream: "
+              f"{time.perf_counter() - t_experiment_start:.1f}s "
+              f"(FL rounds {overhead_totals['rounds_sec']:.1f}s, setup+initial eval "
+              f"{overhead_totals['setup_and_initial_eval_sec']:.1f}s)")
     return server.log_data, progressive_metrics
 
 # Detailed statistics printing for data collection
@@ -870,6 +898,9 @@ def main(config_overrides: Optional[Dict] = None):
         # ========== Experiment Configuration ==========
         'experiment_name': 'pythia_ag_news_augmp_alm_alpha0p1_seed42069',  # Name for result files and logs
         'seed': 42069,  # Random seed for reproducibility (int), 42 is the default
+        'profile_overhead': False,  # True: per-round wall-clock + peak-GPU-memory per component (attacker stages,
+                                    # benign local training, aggregation, evaluation) printed every round, summary
+                                    # table + CSVs at the end (observe/overhead.py). Numerics are unchanged either way.
         
         # ========== Federated Learning Setup ==========
         'num_clients': 7,  # Total number of federated learning clients (int)

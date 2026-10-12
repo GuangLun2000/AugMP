@@ -71,6 +71,9 @@ EXPERIMENT = dict(
     dist_bound=None,
     sim_bound_up=None,
     suffix='',                # appended to the experiment name
+    # --- per-round overhead accounting (reviewer request; observe/overhead.py) ---
+    profile=True,             # True: wall-clock + peak GPU memory per component printed every round and summarised
+                              # at the end (+ CSVs). Timing only, numerics unchanged; False = original log output.
 )
 
 # ---------------------------------------------------------------- pinned hyper-parameters (paper AugMP)
@@ -190,6 +193,7 @@ def make_config(k=None, *, extra: Optional[dict] = None, **overrides) -> dict:
     cfg['local_epochs'] = o['local_epochs']
     cfg['dist_bound'] = o['dist_bound']        # None = adaptive (benign max over the observed updates)
     cfg['sim_bound_up'] = o['sim_bound_up']    # None = adaptive (observed benign mean pairwise similarity)
+    cfg['profile_overhead'] = bool(o['profile'])  # per-round overhead accounting (timing only)
 
     model, dataset, attack, rounds = o['model'], o['dataset'], o['attack'], o['rounds']
     n_benign = o['clients'] - o['attackers']
@@ -271,6 +275,10 @@ if __name__ == '__main__':
     assert mc(k=5, local_epochs=2)['local_epochs'] == 2
     assert mc(k=2, dist_bound=0.5, sim_bound_up=0.3)['dist_bound'] == 0.5
     assert mc(k=5, extra={'proxy_steps': 50})['proxy_steps'] == 50
+    # overhead accounting is a plain flag: never touches the run name, defaults from EXPERIMENT
+    assert e['profile_overhead'] is True and mc(k=5, profile=False)['profile_overhead'] is False
+    assert mc(k=5, profile=False)['experiment_name'] == mc(k=5)['experiment_name']
+    assert mc(attack='none', profile=True)['profile_overhead'] is True
     # parameter-level partial observation
     q = mc(k=5, param_fraction=0.2, rounds=50)
     assert q['experiment_name'] == 'obs_qwen_ag_news_augmp_k5of5_fixed_p0p20_r50', q['experiment_name']

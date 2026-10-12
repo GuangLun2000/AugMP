@@ -10,6 +10,7 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
 from tqdm import tqdm
 from models import VGAE
+from observe.overhead import StageClock  # opt-in per-stage overhead accounting (config 'profile_overhead')
 from torch.nn.utils import stateless
 # ============================================================================
 # CRITICAL: Functional call wrapper for LoRA gradient preservation
@@ -269,7 +270,8 @@ class AttackerClient(Client):
                  grad_clip_norm=1.0,
                  proxy_grad_clip_norm=None,
                  early_stop_constraint_stability_steps=3,
-                 use_proxy_data=True):
+                 use_proxy_data=True,
+                 profile_overhead=False):
         """
         Initialize an attacker client with VGAE-based camouflage capabilities.
         
@@ -325,6 +327,9 @@ class AttackerClient(Client):
         self.proxy_grad_clip_norm = proxy_grad_clip_norm if proxy_grad_clip_norm is not None else grad_clip_norm
         self.early_stop_constraint_stability_steps = early_stop_constraint_stability_steps
         self.use_proxy_data = use_proxy_data
+        # Opt-in overhead accounting (observe/overhead.py). False = no timing code runs at all.
+        self.profile_overhead = bool(profile_overhead)
+        self.last_overhead = None  # per-stage seconds / peak GPU MB of the latest camouflage_update
 
         dummy_loader = data_manager.get_empty_loader()
         super().__init__(client_id, model, dummy_loader, lr, local_epochs, alpha)
@@ -2602,9 +2607,15 @@ class AttackerClient(Client):
             print(f"    [Attacker {self.client_id}] No benign updates, return zero update")
             return poisoned_update  # poisoned_update is always zero (attackers don't train)
 
+        # Opt-in overhead accounting: begin/end pairs below only read clocks / CUDA memory counters
+        # and are no-ops unless config 'profile_overhead' is True (see observe/overhead.py).
+        clock = StageClock(getattr(self, 'profile_overhead', False), self.device)
+        self.last_overhead = None
+        clock.start_total()
+
         # Reset feature indices for this session
         self.feature_indices = None
-        
+
         # ============================================================
         # STEP 1: Prepare feature matrix F ∈ R^{I×M}
         # ============================================================
@@ -2614,14 +2625,16 @@ class AttackerClient(Client):
             return poisoned_update  # poisoned_update is always zero (attackers don't train)
 
         # Move updates to GPU for processing
+        clock.begin('select')
         benign_gpu = [u.to(self.device) for u in self.benign_updates]
         benign_stack = torch.stack([u.detach() for u in benign_gpu])  # (I, full_dim)
-        
+
         # Reduce dimensionality for computational efficiency
         reduced_benign = self._get_reduced_features(benign_gpu, fix_indices=False)  # (I, M)
         # Clean up benign_stack and benign_gpu after feature reduction
         del benign_stack, benign_gpu
         torch.cuda.empty_cache()
+        clock.end('select')
         
         # Ensure reduced_benign has valid shape
         if reduced_benign is None or not isinstance(reduced_benign, torch.Tensor):
@@ -2638,25 +2651,31 @@ class AttackerClient(Client):
         # STEP 2: Construct adjacency matrix A ∈ R^{M×M}
         # According to paper eq. (8): δ_{m,m'} = cosine_sim(w_m, w_m')
         # ============================================================
+        clock.begin('graph')
         adj_matrix = self._construct_graph(reduced_benign)  # (M, M)
+        clock.end('graph')
         
         # ============================================================
         # STEP 3: Train VGAE to learn graph structure
         # Paper: "Train VGAE to maximize L_loss"
         # ============================================================
+        clock.begin('vgae')
         adj_recon = self._train_vgae(adj_matrix, reduced_benign)  # Returns Â
+        clock.end('vgae')
         
         # ============================================================
         # STEP 4: GSP module to generate malicious update
         # Paper: "Use GSP module to obtain F̂, determine w'_j(t)"
         # ============================================================
+        clock.begin('spectral')
         gsp_attack_reduced = self._gsp_generate_malicious(
             reduced_benign, adj_matrix, adj_recon, poisoned_update
         )
-        
+
         # Clean up VGAE-related GPU tensors
         del reduced_benign, adj_matrix, adj_recon
         torch.cuda.empty_cache()
+        clock.end('spectral')
         
         # ============================================================
         # STEP 5: Expand GSP attack back to full dimension
@@ -2665,6 +2684,7 @@ class AttackerClient(Client):
         # ============================================================
         # Create malicious_update on CPU to save GPU memory
         # poisoned_update is likely on CPU, but ensure we create on CPU
+        clock.begin('expand')
         if poisoned_update.device.type == 'cuda':
             malicious_update = torch.zeros_like(poisoned_update)
         else:
@@ -2716,6 +2736,8 @@ class AttackerClient(Client):
             # GSP attack is None: malicious_update remains zeros
             print(f"    [Attacker {self.client_id}] GSP attack is None, using zeros")
         
+        clock.end('expand')
+
         # ============================================================
         # STEP 5: (Removed - attackers don't perform local training)
         # Attackers are data-agnostic and don't have local data for training.
@@ -2742,6 +2764,7 @@ class AttackerClient(Client):
         # ============================================================
         # CRITICAL: Hard preconditions check before optimization
         # global_model_params is always required; proxy_loader is optional (when use_proxy_data=False, no data access)
+        clock.begin('setup')
         if self.global_model_params is None:
             error_msg = (
                 f"[Attacker {self.client_id}] Missing global_model_params before optimization. Cannot proceed."
@@ -2977,6 +3000,8 @@ class AttackerClient(Client):
             aggregation_ref_gpu_sim = None
         # ============================================================================================
         
+        clock.end('setup')
+        clock.begin('diag')  # logging-only: initial-state print (one extra forward pass)
         # Print initial state with dist_bound value (whether manual or auto-computed)
         if dist_bound_val is not None:
             try:
@@ -3089,11 +3114,14 @@ class AttackerClient(Client):
                 traceback.print_exc()
                 raise
         
+        clock.end('diag')
+
         # Early stopping variables: track constraint satisfaction stability
         constraint_satisfied_steps = 0
         constraint_stability_steps = self.early_stop_constraint_stability_steps  # Stop after N consecutive steps satisfying constraint
         prev_dist_val = None
-        
+
+        clock.begin('optimize')
         for step in range(self.proxy_steps):
             # ============================================================
             # CRITICAL: Zero gradients using set_to_none=True for efficiency
@@ -3698,6 +3726,12 @@ class AttackerClient(Client):
                     
                     prev_dist_val = dist_att_val_after_step
         
+        clock.end('optimize')
+        if clock.enabled:
+            # steps actually executed (early stopping breaks out of the loop; `step` is its last index)
+            clock_steps_run = (step + 1) if self.proxy_steps > 0 else 0
+        clock.begin('diag')  # logging-only: final-state print (one extra forward pass)
+
         # ============================================================
         # Print final optimization state
         # ============================================================
@@ -3792,8 +3826,10 @@ class AttackerClient(Client):
                   f"λ_dist={final_lambda_dist:.4f}, loss={final_loss:.4f}, "
                   f"violation={final_violation:.4f} ({violation_pct:.1f}%){final_sim_info}")
         
+        clock.end('diag')
+        clock.begin('finalize')
         malicious_update = proxy_param.detach()
-        
+
         # CRITICAL: Now that optimization is complete, move model back to CPU to free GPU memory
         # The computation graph is no longer needed after optimization
         if self._model_on_gpu:
@@ -3842,6 +3878,8 @@ class AttackerClient(Client):
                     print(f"    [Attacker {self.client_id}] Distance constraint violation: {constraint_violation:.6f} "
                           f"(violation={violation_ratio*100:.1f}%)")
         
+        clock.end('finalize')
+        clock.begin('diag')  # logging-only: final F(w'_g) evaluation (one extra forward pass)
         # Compute final attack objective value for logging
         # Use aggregated update for final loss (consistent with optimization objective)
         # CRITICAL: Use CPU version for final aggregation (GPU caches have been cleaned up)
@@ -3854,6 +3892,8 @@ class AttackerClient(Client):
         )
         final_global_loss = self._proxy_global_loss(final_aggregated_update, max_batches=self.proxy_max_batches_eval, skip_dim_check=True)
         
+        clock.end('diag')
+        clock.begin('finalize')
         malicious_norm = torch.norm(malicious_update).item()
         log_msg = f"    [Attacker {self.client_id}] AugMP: " \
                   f"F(w'_g)={final_global_loss.item():.4f}, " \
@@ -3883,5 +3923,10 @@ class AttackerClient(Client):
             del malicious_update
         del final_global_loss
         torch.cuda.empty_cache()
-        
+
+        clock.end('finalize')
+        clock.stop_total()
+        if clock.enabled:
+            self.last_overhead = clock.report(steps=clock_steps_run, proxy_steps=self.proxy_steps)
+
         return malicious_update_final

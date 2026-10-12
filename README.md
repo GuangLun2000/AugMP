@@ -36,6 +36,7 @@
 ├── observe/                           # Limited-observability experiment (runs through main.py via config)
 │   ├── observe_config.py              # make_config(): pinned config for one observe run
 │   ├── observability.py               # Observation policy (which benign updates attackers see)
+│   ├── overhead.py                    # Opt-in per-round runtime / GPU-memory accounting (config 'profile_overhead')
 │   ├── test_param_mask.py             # Checks for parameter-level partial observation (random coordinate mask)
 │   ├── run_observability_sweep.py     # Optional CLI driver for multi-run sweeps
 │   └── plot_observability.py          # Cross-k comparison figures + CSV summary
