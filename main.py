@@ -896,7 +896,7 @@ def analyze_results(metrics):
 def main(config_overrides: Optional[Dict] = None):
     config = {
         # ========== Experiment Configuration ==========
-        'experiment_name': 'pythia_ag_news_augmp_alpha0p3_seed42069_M1000_round1',  # Name for result files and logs
+        'experiment_name': 'pythia_ag_news_augmp_alpha0p3_seed42069_M1000',  # Name for result files and logs
         'seed': 42069,  # Random seed for reproducibility (int), 42 is the default
         'profile_overhead': True,  # True: per-round wall-clock + peak-GPU-memory per component (attacker stages,
                                     # benign local training, aggregation, evaluation) printed every round, summary
@@ -908,7 +908,7 @@ def main(config_overrides: Optional[Dict] = None):
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
                                     # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
                                     # If set, baseline experiment will use exactly this many benign clients
-        'num_rounds': 1,   # Total number of federated learning rounds (int)
+        'num_rounds': 50,  # Total number of federated learning rounds (int)
         
         # ========== Training Hyperparameters ==========
         'client_lr': 5e-5,  # Learning rate for local client training (float)
