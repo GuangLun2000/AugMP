@@ -130,6 +130,24 @@ def _peak_gb(rep: Optional[dict]) -> Optional[float]:
     return (max(pk.values()) / 1024.0) if pk else None
 
 
+def grl_memory_mb(rep: Optional[dict]) -> Optional[dict]:
+    """GPU memory of the GRL framework in one camouflage_update (MB, torch.cuda.memory_allocated basis).
+
+    resident = memory already allocated when the GRL part starts (global model, buffers, ...), i.e. the
+               base of the first GRL stage ('select');
+    peak     = highest allocation reached during any GRL stage (select/graph/vgae/spectral/expand);
+    extra    = peak - resident = the memory the GRL framework itself needs on top of what is resident.
+    None when no CUDA memory was recorded (CPU run or profiling off).
+    """
+    pk = (rep or {}).get('peak_mb', {}) or {}
+    base = (rep or {}).get('base_mb', {}) or {}
+    peaks = [pk[s] for s in GRL_STAGES if s in pk]
+    if not peaks or 'select' not in base:
+        return None
+    peak, resident = max(peaks), float(base['select'])
+    return {'peak': peak, 'resident': resident, 'extra': max(0.0, peak - resident)}
+
+
 def format_round_overhead(ov: dict, round_num: int, attacker_ids: Iterable[int]) -> List[str]:
     """Lines for the process log, printed once per round."""
     attacker_ids = list(attacker_ids)
@@ -161,6 +179,9 @@ def format_round_overhead(ov: dict, round_num: int, attacker_ids: Iterable[int])
         if pk:
             top = max(pk, key=pk.get)
             pk_str = f" | peak GPU {pk[top] / 1024.0:.2f} GB ({top})"
+        gm = grl_memory_mb(rep)
+        if gm:   # GRL framework's own GPU memory: peak during the GRL stages minus what was resident before them
+            pk_str += f" | GRL GPU mem +{gm['extra']:.1f} MB (resident {gm['resident'] / 1024.0:.2f} GB)"
         lines.append(
             f"    [Attacker {cid}] select {st['select']:.3f} | graph {st['graph']:.3f} | vgae {st['vgae']:.3f} | "
             f"spectral {st['spectral']:.3f} | expand {st['expand']:.3f} | GRL subtotal {grl:.3f} | "
@@ -214,6 +235,10 @@ def summarize_overhead(log_data: List[dict], attacker_ids: Iterable[int]):
             arow['peak_gb'] = _peak_gb(rep)
             for s, mb in ((rep or {}).get('peak_mb', {}) or {}).items():
                 arow[f'peak_gb_{s}'] = mb / 1024.0
+            gm = grl_memory_mb(rep)
+            arow['grl_mem_extra_mb'] = gm['extra'] if gm else None
+            arow['grl_mem_peak_mb'] = gm['peak'] if gm else None
+            arow['grl_mem_resident_mb'] = gm['resident'] if gm else None
             attacker_rows.append(arow)
             for s in ATTACK_STAGES:
                 row[f'att_{s}'] += st[s]
@@ -308,6 +333,13 @@ def print_overhead_summary(log_data: List[dict], attacker_ids: Iterable[int], to
         if steps:
             print(f"steps: mean {statistics.fmean(steps):.1f}, median {statistics.median(steps):.1f}, max {max(steps)}"
                   + (f"; {statistics.fmean(sps):.3f} s/step" if sps else ''))
+        gx = [r['grl_mem_extra_mb'] for r in srows if r.get('grl_mem_extra_mb') is not None]
+        if gx:
+            gp = [r['grl_mem_peak_mb'] for r in srows if r.get('grl_mem_peak_mb') is not None]
+            gr = [r['grl_mem_resident_mb'] for r in srows if r.get('grl_mem_resident_mb') is not None]
+            print(f"GRL GPU memory (peak during GRL stages minus memory resident before them, rounds >= 2): "
+                  f"mean +{statistics.fmean(gx):.1f} MB, max +{max(gx):.1f} MB "
+                  f"(GRL-stage peak {max(gp) / 1024.0:.2f} GB, resident {statistics.fmean(gr) / 1024.0:.2f} GB)")
         bt = [r['train_benign_mean'] for r in steady if r['train_benign_mean']]
         if bt and tot_mean:
             print(f"attacker total / mean benign local training (r>=2): {tot_mean / statistics.fmean(bt):.2f}x")
