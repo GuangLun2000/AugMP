@@ -188,6 +188,11 @@ def format_round_overhead(ov: dict, round_num: int, attacker_ids: Iterable[int])
             f"setup {st['setup']:.2f} | optimize {st['optimize']:.2f} ({steps} steps, {per_step:.3f} s/step) | "
             f"finalize {st['finalize']:.2f} | diag {st['diag']:.2f} | total {rep.get('total', 0.0):.2f}{pk_str}"
         )
+    tp = ov.get('train_peak_mb') or {}
+    benign_peaks = {cid: mb for cid, mb in tp.items() if int(cid) not in attacker_ids}
+    if benign_peaks:
+        lines.append("    [Benign fine-tuning peak GPU] " + ' '.join(f'{cid}:{mb / 1024.0:.2f}' for cid, mb in sorted(benign_peaks.items(), key=lambda kv: int(kv[0])))
+                     + f" GB (mean {sum(benign_peaks.values()) / len(benign_peaks) / 1024.0:.2f} GB, max {max(benign_peaks.values()) / 1024.0:.2f} GB)")
     return lines
 
 
@@ -214,6 +219,9 @@ def summarize_overhead(log_data: List[dict], attacker_ids: Iterable[int]):
                'train_benign_sum': sum(benign_train), 'train_benign_mean': (sum(benign_train) / len(benign_train)) if benign_train else 0.0,
                'attack_wall_sum': sum(ov['attack_wall'].values()), 'aggregate': srv['aggregate'], 'observe': srv['observe'],
                'eval_global': srv['eval_global'], 'eval_local': srv['eval_local'], 'unaccounted': ov.get('unaccounted')}
+        bp = [mb for cid, mb in (ov.get('train_peak_mb') or {}).items() if int(cid) not in attacker_ids]
+        row['train_benign_peak_gb_mean'] = (sum(bp) / len(bp) / 1024.0) if bp else None
+        row['train_benign_peak_gb_max'] = (max(bp) / 1024.0) if bp else None
         for s in ATTACK_STAGES:
             row[f'att_{s}'] = 0.0
         row['att_grl'] = 0.0
@@ -340,6 +348,11 @@ def print_overhead_summary(log_data: List[dict], attacker_ids: Iterable[int], to
             print(f"GRL GPU memory (peak during GRL stages minus memory resident before them, rounds >= 2): "
                   f"mean +{statistics.fmean(gx):.1f} MB, max +{max(gx):.1f} MB "
                   f"(GRL-stage peak {max(gp) / 1024.0:.2f} GB, resident {statistics.fmean(gr) / 1024.0:.2f} GB)")
+        bpk = [r['train_benign_peak_gb_max'] for r in steady if r.get('train_benign_peak_gb_max') is not None]
+        if bpk:
+            bpm = [r['train_benign_peak_gb_mean'] for r in steady if r.get('train_benign_peak_gb_mean') is not None]
+            print(f"Benign local fine-tuning peak GPU memory (rounds >= 2): mean over clients {statistics.fmean(bpm):.2f} GB, "
+                  f"max {max(bpk):.2f} GB")
         bt = [r['train_benign_mean'] for r in steady if r['train_benign_mean']]
         if bt and tot_mean:
             print(f"attacker total / mean benign local training (r>=2): {tot_mean / statistics.fmean(bt):.2f}x")
