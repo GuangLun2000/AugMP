@@ -24,6 +24,7 @@ from visualization import ExperimentVisualizer
 from fed_checkpoint import save_global_model_checkpoint
 from observe.observability import build_observation_policy
 from observe.overhead import print_overhead_summary  # per-round overhead table (opt-in: profile_overhead)
+from shadow_defense import compute_shadow_defense_summary, format_shadow_defense_summary  # shadow robust-aggregation stats (opt-in)
 
 warnings.filterwarnings('ignore')
 
@@ -214,7 +215,14 @@ def setup_experiment(config):
         dist_bound=config.get('dist_bound', config.get('d_T', 0.5)),  # Renamed from d_T
         similarity_mode=config.get('server_similarity_mode', 'local_vs_global'),
         observation_policy=observation_policy,
-        profile_overhead=config.get('profile_overhead', False)
+        profile_overhead=config.get('profile_overhead', False),
+        # Shadow Byzantine-robust defense statistics (opt-in, computed only, never applied; see shadow_defense.py)
+        shadow_defense_enabled=config.get('shadow_defense_enabled', False),
+        shadow_defense_f=config.get('shadow_defense_f', None),
+        shadow_defense_beta=config.get('shadow_defense_beta', None),
+        shadow_defense_multikrum_m=config.get('shadow_defense_multikrum_m', None),
+        shadow_defense_chunk_size=config.get('shadow_defense_chunk_size', 1_000_000),
+        shadow_defense_print_per_round=config.get('shadow_defense_print_per_round', True)
     )
     # Manual cosine similarity bounds (None = use benign min/max)
     server.sim_bound_low = config.get('sim_bound_low', None)
@@ -556,6 +564,10 @@ def run_experiment(config):
     }
     if overhead_totals is not None:
         results_data['overhead_totals'] = overhead_totals
+    if config.get('shadow_defense_enabled', False):
+        # Run-level rates (DR / FPR / ER) of the shadow robust-aggregation rules. Read-only over server.log_data.
+        shadow_attacker_ids = [c.client_id for c in server.clients if getattr(c, 'is_attacker', False)]
+        results_data['shadow_defense_summary'] = compute_shadow_defense_summary(server.log_data, shadow_attacker_ids)
 
     results_path = results_dir / f"{config['experiment_name']}_results.json"
     with open(results_path, 'w') as f:
@@ -793,6 +805,79 @@ def print_detailed_statistics(server_log_data, progressive_metrics, local_accura
     
     print("-" * 80)
     
+    # ========== 3b. Shadow Byzantine-robust defense statistics (opt-in; only when the round logs carry them) ==========
+    shadow_rounds = [(log['round'], log['aggregation']['shadow_defense']) for log in server_log_data
+                     if isinstance(log.get('aggregation'), dict) and log['aggregation'].get('shadow_defense')]
+    if shadow_rounds:
+        def _shadow_table(title, value_fn, int_values=False, extra_cols=(), extra_fn=None):
+            # Same layout as the tables above: Round | Client0(B) | ... (sorted(all_client_ids) order, 6 decimals)
+            print("\n" + "-" * 80)
+            print(title)
+            print("-" * 80)
+            cols = ["Round"] + [f"Client{cid}({'A' if cid in attacker_ids_set else 'B'})" for cid in all_client_ids]
+            print(" | ".join(cols + list(extra_cols)))
+            print("-" * 80)
+            for round_num, st in shadow_rounds:
+                idx = {cid: i for i, cid in enumerate(st['client_ids'])}
+                cells = [f"{round_num:<6}"]
+                for cid in all_client_ids:
+                    i = idx.get(cid)
+                    if i is None:
+                        cells.append(f"{'-':<14}")
+                    elif int_values:
+                        cells.append(f"{int(value_fn(st, i)):<14d}")
+                    else:
+                        cells.append(f"{value_fn(st, i):<14.6f}")
+                if extra_fn is not None:
+                    cells.extend(extra_fn(st))
+                print(" | ".join(cells))
+            print("-" * 80)
+
+        def _shadow_pair_table(title, key, prefix):
+            # Upper triangle of the per-round (n, n) matrix: one column per client pair (i < j)
+            print("\n" + "-" * 80)
+            print(title)
+            print("-" * 80)
+            pairs = [(a, b) for ai, a in enumerate(all_client_ids) for b in all_client_ids[ai + 1:]]
+            print(" | ".join(["Round"] + [f"{prefix}({a},{b})" for a, b in pairs]))
+            print("-" * 80)
+            for round_num, st in shadow_rounds:
+                idx = {cid: i for i, cid in enumerate(st['client_ids'])}
+                mat = st[key]
+                cells = [f"{round_num:<6}"]
+                for a, b in pairs:
+                    if a in idx and b in idx:
+                        cells.append(f"{mat[idx[a]][idx[b]]:<14.6f}")
+                    else:
+                        cells.append(f"{'-':<14}")
+                print(" | ".join(cells))
+            print("-" * 80)
+
+        _shadow_table("4️⃣  SHADOW KRUM SCORE (Per Round, Per Client)",
+                      lambda st, i: st['krum_score'][i],
+                      extra_cols=("Selected", "SelIsAtk"),
+                      extra_fn=lambda st: [f"{st['krum_selected']:<8d}",
+                                           f"{int(st['krum_selected'] in attacker_ids_set):<8d}"])
+        _shadow_table("4b. SHADOW MULTI-KRUM REJECTED (Per Round, Per Client)",
+                      lambda st, i: st['mkrum_rejected_flag'][i], int_values=True)
+        _shadow_table("4c. SHADOW TRIMMED-MEAN TRIM FRACTION (Per Round, Per Client)",
+                      lambda st, i: st['tm_trim_frac'][i])
+        _shadow_table("4d. SHADOW MEDIAN PROVIDER FRACTION (Per Round, Per Client)",
+                      lambda st, i: st['median_provider_frac'][i])
+        _shadow_table("4e. SHADOW DISTANCE TO COORDINATE MEDIAN (Per Round, Per Client)",
+                      lambda st, i: st['dist_to_median'][i])
+        _shadow_table("4f. UPDATE NORM (Per Round, Per Client)",
+                      lambda st, i: st['norms'][i])
+        _shadow_pair_table("4g. PAIRWISE SQUARED DISTANCE (Per Round, Upper Triangle)", 'pairwise_sq_dist', 'd')
+        _shadow_pair_table("4h. PAIRWISE COSINE (Per Round, Upper Triangle)", 'pairwise_cos', 'c')
+
+        shadow_summary = compute_shadow_defense_summary(server_log_data, attacker_ids)
+        if shadow_summary is not None:
+            print("\n" + "-" * 80)
+            for line in format_shadow_defense_summary(shadow_summary):
+                print(line)
+            print("-" * 80)
+    
     # ========== 4. Save to CSV files for easy import ==========
     print("\n" + "-" * 80)
     print("💾 SAVING DATA TO CSV FILES FOR EASY COLLECTION")
@@ -901,6 +986,17 @@ def main(config_overrides: Optional[Dict] = None):
         'profile_overhead': True,  # True: per-round wall-clock + peak-GPU-memory per component (attacker stages,
                                     # benign local training, aggregation, evaluation) printed every round, summary
                                     # table + CSVs at the end (observe/overhead.py). Numerics are unchanged either way.
+        # ----- Shadow Byzantine-robust defense statistics (opt-in; see shadow_defense.py) -----
+        # Krum / Multi-Krum / Trimmed Mean / Coordinate-wise Median are evaluated every round on the SAME client
+        # updates FedAvg aggregates, to measure whether the malicious updates WOULD be rejected / trimmed
+        # (Detection Rate, False Positive Rate, Evasion Rate). Nothing is applied: aggregation, attackers and all
+        # random streams are unchanged. False = output byte-identical to a run without these keys.
+        'shadow_defense_enabled': False,        # master switch; False = no extra compute, no extra prints, no extra log keys
+        'shadow_defense_f': None,               # f assumed by Krum/Multi-Krum; None = number of attacker clients registered on the server
+        'shadow_defense_beta': None,            # beta for Trimmed Mean (per side); None = same as f
+        'shadow_defense_multikrum_m': None,     # m for Multi-Krum; None = n - f
+        'shadow_defense_chunk_size': 1_000_000, # coordinates per chunk for the coordinate-wise rules
+        'shadow_defense_print_per_round': True, # per-round [shadow] lines in Phase 4 (end-of-run tables and summary always print when enabled)
         
         # ========== Federated Learning Setup ==========
         'num_clients': 7,  # Total number of federated learning clients (int)

@@ -10,6 +10,7 @@ from client import BenignClient, AttackerClient
 import torch.nn.functional as F
 from observe.observability import to_float  # limited-observability ablation (opt-in)
 from observe.overhead import StageClock, build_round_overhead, format_round_overhead  # per-round overhead (opt-in)
+from shadow_defense import compute_shadow_defense_stats, format_shadow_defense_round  # shadow robust-aggregation stats (opt-in)
 
 
 class Server:
@@ -19,7 +20,13 @@ class Server:
                 dist_bound=0.5,
                 similarity_mode='local_vs_global',
                 observation_policy=None,
-                profile_overhead=False):
+                profile_overhead=False,
+                shadow_defense_enabled=False,
+                shadow_defense_f=None,
+                shadow_defense_beta=None,
+                shadow_defense_multikrum_m=None,
+                shadow_defense_chunk_size=1_000_000,
+                shadow_defense_print_per_round=True):
         self.global_model = copy.deepcopy(global_model)
         self.test_loader = test_loader
         self.total_rounds = total_rounds
@@ -52,6 +59,18 @@ class Server:
 
         # Per-round overhead accounting (observe/overhead.py). False (default) = no timing code runs.
         self.profile_overhead = bool(profile_overhead)
+
+        # Shadow Byzantine-robust defense statistics (shadow_defense.py). False (default) = no extra
+        # compute, prints or log keys. When on, Krum / Multi-Krum / Trimmed Mean / Coordinate-wise Median
+        # are evaluated every round on the same updates FedAvg aggregates, but NEVER applied.
+        self.shadow_defense_enabled = bool(shadow_defense_enabled)
+        self.shadow_defense_f = shadow_defense_f                      # None = number of registered attackers
+        self.shadow_defense_beta = shadow_defense_beta                # None = f
+        self.shadow_defense_multikrum_m = shadow_defense_multikrum_m  # None = n - f
+        self.shadow_defense_chunk_size = shadow_defense_chunk_size
+        self.shadow_defense_print_per_round = bool(shadow_defense_print_per_round)
+        self.shadow_defense_history = []        # one stats dict per round (same objects as in log_data)
+        self._shadow_defense_warned = set()     # parameter-clamp warnings already printed (once per run)
 
         # Track historical data
         self.history = {
@@ -325,7 +344,33 @@ class Server:
             aggregation_log['similarities_vs_global'] = similarities_vs_global.tolist()
         aggregation_log['similarity_mode'] = mode
 
+        # Opt-in shadow robust-aggregation statistics (computed on the same updates, never applied).
+        if self.shadow_defense_enabled:
+            aggregation_log['shadow_defense'] = self._shadow_defense_round(updates, client_ids, similarity_matrix)
+
         return aggregation_log
+
+    def _shadow_defense_round(self, updates: List[torch.Tensor], client_ids: List[int],
+                              similarity_matrix=None) -> Dict:
+        """
+        Evaluate Krum / Multi-Krum / Trimmed Mean / Coordinate-wise Median on the submitted updates
+        WITHOUT applying them (shadow_defense.py). Attacker/benign labels are used only for the
+        (A)/(B) display tags; the defense computations never see them. The pairwise cosine matrix
+        already computed this round (similarity_mode 'pairwise'/'both') is reused when available.
+        """
+        f = self.shadow_defense_f
+        if f is None:
+            f = sum(1 for c in self.clients if getattr(c, 'is_attacker', False))
+        stats = compute_shadow_defense_stats(
+            updates, client_ids, f=int(f), beta=self.shadow_defense_beta, m=self.shadow_defense_multikrum_m,
+            chunk_size=self.shadow_defense_chunk_size, device=self.device,
+            pairwise_cos=similarity_matrix, warned=self._shadow_defense_warned)
+        self.shadow_defense_history.append(stats)
+        if self.shadow_defense_print_per_round:
+            is_attacker = {cid: bool(getattr(self.client_dict.get(cid), 'is_attacker', False)) for cid in client_ids}
+            for line in format_shadow_defense_round(stats, is_attacker):
+                print(line)
+        return stats
 
     def evaluate_local_accuracy(self, client) -> float:
         """
