@@ -52,6 +52,54 @@ def launch(overrides: dict, log_path: Path) -> int:
         return proc.wait()
 
 
+def gpu_preflight(abort_above_gb: float = 20.0, ignore: bool = False) -> None:
+    """Refuse to start while another process holds a large part of the GPU (the attacker needs ~57-65 GB on
+    Qwen; a Step 3 run still alive in the notebook kernel made every sweep run OOM on 2026-10-15)."""
+    try:
+        q = subprocess.run(['nvidia-smi', '--query-gpu=memory.used,memory.total', '--format=csv,noheader,nounits'],
+                           capture_output=True, text=True, timeout=20)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        print("GPU pre-flight: nvidia-smi not available, skipping")
+        return
+    if q.returncode != 0 or not q.stdout.strip():
+        print("GPU pre-flight: nvidia-smi gave no answer, skipping")
+        return
+    used_mb, total_mb = (float(x) for x in q.stdout.strip().splitlines()[0].split(','))
+    apps = subprocess.run(['nvidia-smi', '--query-compute-apps=pid,used_memory', '--format=csv,noheader'],
+                          capture_output=True, text=True).stdout.strip()
+    print(f"GPU pre-flight: {used_mb / 1024:.1f} GB of {total_mb / 1024:.1f} GB already in use"
+          + (f"; compute processes: {apps.replace(chr(10), ' | ')}" if apps else ""))
+    if used_mb / 1024 > abort_above_gb:
+        msg = (f"GPU pre-flight: {used_mb / 1024:.1f} GB is held by other processes (e.g. a Step 3 run still alive in the "
+               f"notebook kernel). Stop them (Runtime -> Restart session, then Steps 0-2) before the sweep")
+        if ignore:
+            print(msg + " -- continuing because --ignore-gpu-busy was given")
+        else:
+            sys.exit(msg + ", or pass --ignore-gpu-busy.")
+
+
+def diagnose_failure(log_path: Path) -> str:
+    """One line explaining why a run produced no overhead CSV, taken from its log."""
+    try:
+        text = log_path.read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return 'log not readable'
+    if 'out of memory' in text.lower():
+        import re
+        m = re.search(r'CUDA out of memory.*?(?=\n)', text)
+        return 'CUDA out of memory: ' + (m.group(0)[:300] if m else '')
+    lines = text.splitlines()
+    for line in lines:
+        if line.startswith('Experiment failed with error'):
+            return line[:300]
+    if any(line.startswith('Traceback') for line in lines):   # uncaught exception: report its last line
+        tail = [line for line in lines[-15:] if line.strip() and not line.startswith(' ')]
+        return 'uncaught exception: ' + (tail[-1][:300] if tail else 'see log')
+    if 'No rounds completed' in text:
+        return 'no round completed (see log)'
+    return 'unknown (see log)'
+
+
 def _f(v):
     try:
         return float(v)
@@ -125,6 +173,8 @@ def main():
     ap.add_argument('--extra', default=None, help='JSON dict of additional config overrides applied to every run (smoke tests)')
     ap.add_argument('--summary-only', action='store_true', help='do not run; tabulate existing result CSVs')
     ap.add_argument('--dry-run', action='store_true', help='print the per-run overrides and exit')
+    ap.add_argument('--continue-on-failure', action='store_true', help='keep running the remaining M values after a failed run')
+    ap.add_argument('--ignore-gpu-busy', action='store_true', help='start even if other processes already hold > 20 GB of GPU memory')
     args = ap.parse_args()
 
     base = args.name_base or resolve_experiment_name()
@@ -146,15 +196,25 @@ def main():
     if args.dry_run:
         return
 
-    status = {}
+    failed = {}
     if not args.summary_only:
+        gpu_preflight(ignore=args.ignore_gpu_busy)
         for M, ov in plan:
             log_path = results_dir / f"{ov['experiment_name']}_log.txt"
             print("\n" + "#" * 100 + f"\n# M = {M}   ->   {ov['experiment_name']}   (log: {log_path})\n" + "#" * 100, flush=True)
             t0 = time.perf_counter()
             rc = launch(ov, log_path)
-            status[M] = rc
-            print(f"\n# M = {M} finished with exit code {rc} in {(time.perf_counter() - t0) / 60:.1f} min", flush=True)
+            minutes = (time.perf_counter() - t0) / 60
+            # main.py catches its own exceptions and exits 0, so success = the overhead CSV exists
+            ok = rc == 0 and (results_dir / f"{ov['experiment_name']}_overhead_attackers.csv").exists()
+            if ok:
+                print(f"\n# M = {M} finished OK in {minutes:.1f} min", flush=True)
+                continue
+            failed[M] = diagnose_failure(log_path) + ('' if rc == 0 else f' (exit code {rc})')
+            print(f"\n# M = {M} FAILED after {minutes:.1f} min: {failed[M]}", flush=True)
+            if not args.continue_on_failure:
+                print("# stopping the sweep (pass --continue-on-failure to run the remaining M values anyway)", flush=True)
+                break
 
     rows = []
     for M, ov in plan:
@@ -174,7 +234,12 @@ def main():
             w.writeheader()
             w.writerows(rows)
         print(f"summary saved to: {out}")
-    if any(rc != 0 for rc in status.values()):
+    print("\nFiles per run (all under results/, zipped by notebook Step 6):")
+    for M, ov in plan:
+        files = sorted(f.name for f in results_dir.glob(f"{ov['experiment_name']}_*"))
+        print(f"  M={M}: " + (', '.join(files) if files else '(none)'))
+    if failed:
+        print("FAILED runs: " + '; '.join(f"M={M}: {why}" for M, why in failed.items()))
         sys.exit(1)
 
 
