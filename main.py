@@ -981,7 +981,10 @@ def analyze_results(metrics):
 def main(config_overrides: Optional[Dict] = None):
     config = {
         # ========== Experiment Configuration ==========
-        'experiment_name': 'qwen_ag_news_augmp_alpha0p3_seed42069_shadow',  # Name for result files and logs
+        # Controlled comparison with the AugMP run 'qwen_ag_news_augmp_alpha0p3_seed42069_shadow': only 'attack_method'
+        # (and this name) differ. Same seed -> same Dirichlet partition, same LoRA init, same proxy set, same
+        # shadow-defense parameters (n=7, f=2 -> Krum k=3, Multi-Krum m=5, Trimmed Mean beta=2).
+        'experiment_name': 'qwen_ag_news_alie_alpha0p3_seed42069_shadow',  # Name for result files and logs
         'seed': 42069,  # Random seed for reproducibility (int), 42 is the default
 
         # ========== Federated Learning Setup ==========
@@ -1053,7 +1056,9 @@ def main(config_overrides: Optional[Dict] = None):
         
 
         # ========== Attack Configuration ==========
-        'attack_method': 'AugMP',  # Proposed: 'AugMP' (legacy alias 'GRMP'). Baselines: 'ALIE', 'SignFlipping', 'Gaussian'
+        'attack_method': 'ALIE',  # Proposed: 'AugMP' (legacy alias 'GRMP'). Baselines: 'ALIE', 'SignFlipping', 'Gaussian'
+                                  # Current run: ALIE (NeurIPS '19) baseline against the shadow defenses; switch back to
+                                  # 'AugMP' (and the experiment_name) for the paired AugMP run. Nothing else changes.
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
         
         # ========== ALIE Attack Parameters (only used when attack_method='ALIE') ==========
