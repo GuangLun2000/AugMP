@@ -981,7 +981,7 @@ def analyze_results(metrics):
 def main(config_overrides: Optional[Dict] = None):
     config = {
         # ========== Experiment Configuration ==========
-        'experiment_name': 'qwen_ag_news_augmp_alpha0p3_seed42069_mem3',  # Name for result files and logs
+        'experiment_name': 'qwen_ag_news_augmp_alpha0p3_seed42069_shadow',  # Name for result files and logs
         'seed': 42069,  # Random seed for reproducibility (int), 42 is the default
 
         # ========== Federated Learning Setup ==========
@@ -990,7 +990,7 @@ def main(config_overrides: Optional[Dict] = None):
         'num_benign_clients': None,  # Optional: Explicit number of benign clients for baseline experiment
                                     # If None, baseline will use (num_clients - num_attackers) to ensure fair comparison
                                     # If set, baseline experiment will use exactly this many benign clients
-        'num_rounds': 3,   # Total number of federated learning rounds (int)
+        'num_rounds': 50,   # Total number of federated learning rounds (int)
         
         # ========== Training Hyperparameters ==========
         'client_lr': 5e-5,  # Learning rate for local client training (float)
@@ -1138,7 +1138,7 @@ def main(config_overrides: Optional[Dict] = None):
         # updates FedAvg aggregates, to measure whether the malicious updates WOULD be rejected / trimmed
         # (Detection Rate, False Positive Rate, Evasion Rate). Nothing is applied: aggregation, attackers and all
         # random streams are unchanged. False = output byte-identical to a run without these keys.
-        'shadow_defense_enabled': False,        # master switch; False = no extra compute, no extra prints, no extra log keys
+        'shadow_defense_enabled': True,         # master switch; False = no extra compute, no extra prints, no extra log keys
         'shadow_defense_f': None,               # f assumed by Krum/Multi-Krum; None = number of attacker clients registered on the server
         'shadow_defense_beta': None,            # beta for Trimmed Mean (per side); None = same as f
         'shadow_defense_multikrum_m': None,     # m for Multi-Krum; None = n - f
