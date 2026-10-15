@@ -983,21 +983,7 @@ def main(config_overrides: Optional[Dict] = None):
         # ========== Experiment Configuration ==========
         'experiment_name': 'qwen_ag_news_augmp_alpha0p3_seed42069_mem3',  # Name for result files and logs
         'seed': 42069,  # Random seed for reproducibility (int), 42 is the default
-        'profile_overhead': True,  # True: per-round wall-clock + peak-GPU-memory per component (attacker stages,
-                                    # benign local training, aggregation, evaluation) printed every round, summary
-                                    # table + CSVs at the end (observe/overhead.py). Numerics are unchanged either way.
-        # ----- Shadow Byzantine-robust defense statistics (opt-in; see shadow_defense.py) -----
-        # Krum / Multi-Krum / Trimmed Mean / Coordinate-wise Median are evaluated every round on the SAME client
-        # updates FedAvg aggregates, to measure whether the malicious updates WOULD be rejected / trimmed
-        # (Detection Rate, False Positive Rate, Evasion Rate). Nothing is applied: aggregation, attackers and all
-        # random streams are unchanged. False = output byte-identical to a run without these keys.
-        'shadow_defense_enabled': False,        # master switch; False = no extra compute, no extra prints, no extra log keys
-        'shadow_defense_f': None,               # f assumed by Krum/Multi-Krum; None = number of attacker clients registered on the server
-        'shadow_defense_beta': None,            # beta for Trimmed Mean (per side); None = same as f
-        'shadow_defense_multikrum_m': None,     # m for Multi-Krum; None = n - f
-        'shadow_defense_chunk_size': 1_000_000, # coordinates per chunk for the coordinate-wise rules
-        'shadow_defense_print_per_round': True, # per-round [shadow] lines in Phase 4 (end-of-run tables and summary always print when enabled)
-        
+
         # ========== Federated Learning Setup ==========
         'num_clients': 7,  # Total number of federated learning clients (int)
         'num_attackers': 2,  # Number of attacker clients (int, must be < num_clients)
@@ -1114,7 +1100,7 @@ def main(config_overrides: Optional[Dict] = None):
         'sim_bound_up': None,   # Manual upper bound for cosine similarity (None = use benign mean)
         # Server cosine similarity mode: 'local_vs_global' (each client vs Δ_g) | 'pairwise' (local vs local, report mean to others) | 'both'
         'server_similarity_mode': 'pairwise',  # Use 'pairwise' to avoid self-comparison; set to 'local_vs_global' to match AugMP constraint definition
-
+        
         # ========== Lagrangian Dual Parameters ==========
         'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
         # Distance constraint multiplier parameters
@@ -1143,6 +1129,22 @@ def main(config_overrides: Optional[Dict] = None):
         'rho_increase_factor': 2.0,
         'rho_min': 1e-4,
         'rho_max': 1e4,
+
+        'profile_overhead': True,  # True: per-round wall-clock + peak-GPU-memory per component (attacker stages,
+                                    # benign local training, aggregation, evaluation) printed every round, summary
+                                    # table + CSVs at the end (observe/overhead.py). Numerics are unchanged either way.
+        # ----- Shadow Byzantine-robust defense statistics (opt-in; see shadow_defense.py) -----
+        # Krum / Multi-Krum / Trimmed Mean / Coordinate-wise Median are evaluated every round on the SAME client
+        # updates FedAvg aggregates, to measure whether the malicious updates WOULD be rejected / trimmed
+        # (Detection Rate, False Positive Rate, Evasion Rate). Nothing is applied: aggregation, attackers and all
+        # random streams are unchanged. False = output byte-identical to a run without these keys.
+        'shadow_defense_enabled': False,        # master switch; False = no extra compute, no extra prints, no extra log keys
+        'shadow_defense_f': None,               # f assumed by Krum/Multi-Krum; None = number of attacker clients registered on the server
+        'shadow_defense_beta': None,            # beta for Trimmed Mean (per side); None = same as f
+        'shadow_defense_multikrum_m': None,     # m for Multi-Krum; None = n - f
+        'shadow_defense_chunk_size': 1_000_000, # coordinates per chunk for the coordinate-wise rules
+        'shadow_defense_print_per_round': True, # per-round [shadow] lines in Phase 4 (end-of-run tables and summary always print when enabled)
+
         # ========== Proxy Loss Estimation Parameters ==========
         'attacker_use_proxy_data': True,  # If True, AugMP client uses proxy set to estimate F(w'_g); if False, no data access (constraint-only optimization)
         'proxy_sample_size': 200,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
