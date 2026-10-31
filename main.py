@@ -981,7 +981,7 @@ def analyze_results(metrics):
 def main(config_overrides: Optional[Dict] = None):
     config = {
         # ========== Experiment Configuration ==========
-        'experiment_name': 'pythia_ag_news_augmp_alpha0p3_seed42069_M1000_shadow',  # Name for result files and logs
+        'experiment_name': 'pythia_ag_news_augmp_alpha0p3_seed42069_M500_repeat260213',  # Name for result files and logs (repeat of reference run 260213, legacy name 'vgae_grmp_attack')
         'seed': 42069,  # Random seed for reproducibility (int), 42 is the default
 
         # ========== Federated Learning Setup ==========
@@ -1049,8 +1049,7 @@ def main(config_overrides: Optional[Dict] = None):
         'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (paper Pythia reference run 260213: grad_clip_norm 1.0)
         # 'model_name': 'facebook/opt-125m',         # OPT-125M (Meta)
         # 'model_name': 'Qwen/Qwen2.5-0.5B',  # Qwen2.5-0.5B ~494M (Alibaba, LLaMA-style arch, Apache 2.0) — use BASE for fine-tuning (or Qwen/Qwen2.5-0.5B-Instruct)
-        # num_labels and max_length: set above in Dataset Configuration based on chosen dataset
-        
+        # num_labels and max_length: set above in Dataset Configuration based on chosen dataset        
 
         # ========== Attack Configuration ==========
         'attack_method': 'AugMP',  # Proposed: 'AugMP' (legacy alias 'GRMP'). Baselines: 'ALIE', 'SignFlipping', 'Gaussian'
@@ -1064,12 +1063,12 @@ def main(config_overrides: Optional[Dict] = None):
         'sign_flip_attack_start_round': None,  # Round to start Sign-Flipping attack (None = start immediately)
         # ========== Gaussian Attack Parameters (only used when attack_method='Gaussian') ==========
         'gaussian_attack_start_round': None,  # USENIX Security '20: Round to start Gaussian attack (None = start immediately)
-        'gaussian_std_scale': 1.0,  # Scale factor for noise std: attack_vec ~ N(mean, (scale*std)²). scale>1 expands noise to increase impact (FedAvg). 1.0=original Fang et al.
+        'gaussian_std_scale': 5.0,  # Scale factor for noise std: attack_vec ~ N(mean, (scale*std)²). scale>1 expands noise to increase impact (FedAvg). 1.0=original Fang et al.
 
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
         # Note: dim_reduction_size should be <= total trainable parameters
-        'dim_reduction_size': 1000,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
+        'dim_reduction_size': 500,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
         'vgae_epochs': 20,  # Number of epochs for VGAE training (reference: 20)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
         'vgae_hidden_dim': 64,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
@@ -1081,7 +1080,7 @@ def main(config_overrides: Optional[Dict] = None):
 
         # ========== AugMP proxy optimization parameters ==========
         'proxy_step': 0.001,  # Step size for gradient-free ascent toward global-loss proxy
-        'proxy_steps': 100,  # Number of optimization steps for AugMP proxy objective (int)
+        'proxy_steps': 200,  # Number of optimization steps for AugMP proxy objective (int)
         'attacker_proxy_grad_clip_norm': 1.0,  # AugMP proxy-parameter update only; separate from benign training
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
         # ----- Limited-observability ablation (opt-in; see observability.py / run_observability_sweep.py) -----
@@ -1127,10 +1126,10 @@ def main(config_overrides: Optional[Dict] = None):
         'rho_adaptive': True,
         'rho_theta': 0.5,            # If σ_k > theta * σ_{k-1} then increase ρ
         'rho_increase_factor': 2.0,
-        'rho_min': 1e-4,
+        'rho_min': 1e-3,
         'rho_max': 1e4,
 
-        'profile_overhead': True,  # True: per-round wall-clock + peak-GPU-memory per component (attacker stages,
+        'profile_overhead': False,  # True: per-round wall-clock + peak-GPU-memory per component (attacker stages,
                                     # benign local training, aggregation, evaluation) printed every round, summary
                                     # table + CSVs at the end (observe/overhead.py). Numerics are unchanged either way.
         # ----- Shadow Byzantine-robust defense statistics (opt-in; see shadow_defense.py) -----
@@ -1138,7 +1137,7 @@ def main(config_overrides: Optional[Dict] = None):
         # updates FedAvg aggregates, to measure whether the malicious updates WOULD be rejected / trimmed
         # (Detection Rate, False Positive Rate, Evasion Rate). Nothing is applied: aggregation, attackers and all
         # random streams are unchanged. False = output byte-identical to a run without these keys.
-        'shadow_defense_enabled': True,         # master switch; False = no extra compute, no extra prints, no extra log keys
+        'shadow_defense_enabled': False,        # master switch; False = no extra compute, no extra prints, no extra log keys
         'shadow_defense_f': None,               # f assumed by Krum/Multi-Krum; None = number of attacker clients registered on the server
         'shadow_defense_beta': None,            # beta for Trimmed Mean (per side); None = same as f
         'shadow_defense_multikrum_m': None,     # m for Multi-Krum; None = n - f
