@@ -981,7 +981,7 @@ def analyze_results(metrics):
 def main(config_overrides: Optional[Dict] = None):
     config = {
         # ========== Experiment Configuration ==========
-        'experiment_name': 'pythia_ag_news_augmp_alpha0p3_seed42069_M500_nosim',  # Name for result files and logs (ablation of reference run 260213: similarity constraint off, legacy name 'vgae_grmp_attack')
+        'experiment_name': 'pythia_ag_news_augmp_alpha0p3_seed42069_M500_repeat260213',  # Name for result files and logs (repeat of reference run 260213, legacy name 'vgae_grmp_attack')
         'seed': 42069,  # Random seed for reproducibility (int), 42 is the default
 
         # ========== Federated Learning Setup ==========
@@ -1107,7 +1107,7 @@ def main(config_overrides: Optional[Dict] = None):
         'lambda_dist_lr': 0.01,    # Learning rate for λ_dist(t) update (dual ascent step size)
         
         # ========== Cosine Similarity Constraint Parameters (TWO-SIDED with TWO multipliers) False by default ==========
-        'use_cosine_similarity_constraint': False,  # ABLATION: similarity constraint OFF (reference run 260213 used True); distance constraint stays on. Whether to enable cosine similarity constraints (bool, True/False) False by default! open both to use pairwise sim
+        'use_cosine_similarity_constraint': True,  # Whether to enable cosine similarity constraints (bool, True/False) False by default! open both to use pairwise sim
         'use_pairwise_similarity_in_constraint': True,  # When True and similarity constraint on: use pairwise sim (align with server_similarity_mode='pairwise') open both to use pairwise sim
         'lambda_sim_low_init': 0.1,  # Initial λ_sim_low(t) value for lower bound constraint: sim_bound_low <= sim_att
         'lambda_sim_up_init': 0.1,   # Initial λ_sim_up(t) value for upper bound constraint: sim_att <= sim_bound_up
