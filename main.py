@@ -30,11 +30,19 @@ warnings.filterwarnings('ignore')
 
 # Initialize experiment components
 def setup_experiment(config):
-    # Set random seeds for reproducibility
-    torch.manual_seed(config['seed'])
-    np.random.seed(config['seed'])
+    # Set random seeds for reproducibility.
+    # 'training_seed' (opt-in) only seeds the global torch/numpy RNGs (model init, dropout, DataLoader shuffle);
+    # the data partition, test subset and proxy subset below keep using config['seed'].
+    # None = use config['seed'] for everything (original behaviour).
+    training_seed = config.get('training_seed')
+    if training_seed is None:
+        training_seed = config['seed']
+    else:
+        print(f"training_seed={training_seed} (partition/test/proxy subsets stay on seed={config['seed']})")
+    torch.manual_seed(training_seed)
+    np.random.seed(training_seed)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed(config['seed'])
+        torch.cuda.manual_seed(training_seed)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
@@ -981,8 +989,10 @@ def analyze_results(metrics):
 def main(config_overrides: Optional[Dict] = None):
     config = {
         # ========== Experiment Configuration ==========
-        'experiment_name': 'pythia_ag_news_augmp_alpha0p3_seed42069_M500_repeat260213',  # Name for result files and logs (repeat of reference run 260213, legacy name 'vgae_grmp_attack')
+        'experiment_name': 'pythia_ag_news_augmp_alpha0p3_seed42069_M500_tseed1',  # Name for result files and logs (repeat of reference run 260213 with training_seed=1; Run 2 used '..._M500_repeat260213', legacy name 'vgae_grmp_attack')
         'seed': 42069,  # Random seed for reproducibility (int), 42 is the default
+        'training_seed': 1,  # Repeat runs: seeds ONLY model init / dropout / DataLoader shuffle; data partition, test and proxy subsets stay on 'seed'.
+                             # ORIGINAL VALUE: None (= use 'seed' 42069 for everything, byte-identical to reference run 260213 and repeat Run 2). Set back to None to reproduce them.
 
         # ========== Federated Learning Setup ==========
         'num_clients': 7,  # Total number of federated learning clients (int)
