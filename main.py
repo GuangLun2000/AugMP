@@ -989,11 +989,10 @@ def analyze_results(metrics):
 def main(config_overrides: Optional[Dict] = None):
     config = {
         # ========== Experiment Configuration ==========
-        'experiment_name': 'pythia_ag_news_augmp_alpha0p3_seed42069_M500_tseed1',  # Name for result files and logs (repeat of reference run 260213 with training_seed=1; Run 2 used '..._M500_repeat260213', legacy name 'vgae_grmp_attack')
-        'seed': 42069,  # Random seed for reproducibility (int), 42 is the default
-        'training_seed': 1,  # Repeat runs: seeds ONLY model init / dropout / DataLoader shuffle; data partition, test and proxy subsets stay on 'seed'.
-                             # ORIGINAL VALUE: None (= use 'seed' 42069 for everything, byte-identical to reference run 260213 and repeat Run 2). Set back to None to reproduce them.
-
+        'experiment_name': 'pythia_ag_news_augmp_alpha0p3_seed42069_M500_repeat260213',  # Name for result files and logs (repeat of reference run 260213, legacy name 'vgae_grmp_attack'; training_seed runs used '..._M500_tseed<N>')
+        'seed': 42069,  # Random seed for reproducibility (int), 42/42069/1 are the default
+        'training_seed': 42,  # ORIGINAL VALUE: None
+        
         # ========== Federated Learning Setup ==========
         'num_clients': 7,  # Total number of federated learning clients (int)
         'num_attackers': 2,  # Number of attacker clients (int, must be < num_clients)
