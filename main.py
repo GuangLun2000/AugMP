@@ -989,9 +989,9 @@ def analyze_results(metrics):
 def main(config_overrides: Optional[Dict] = None):
     config = {
         # ========== Experiment Configuration ==========
-        'experiment_name': 'pythia_ag_news_augmp_alpha0p3_seed42069_M500_repeat260213',  # Name for result files and logs (repeat of reference run 260213, legacy name 'vgae_grmp_attack'; training_seed runs used '..._M500_tseed<N>')
+        'experiment_name': 'distilbert_ag_news_augmp_alpha0p3_seed42069_M5000_classic',  # Name for result files and logs (classic DistilBERT config, legacy name 'vgae_grmp_attack'; Pythia repeat of 260213 used 'pythia_ag_news_augmp_alpha0p3_seed42069_M500_repeat260213', training_seed runs '..._M500_tseed<N>')
         'seed': 42069,  # Random seed for reproducibility (int), 42/42069/1 are the default
-        'training_seed': 42,  # ORIGINAL VALUE: None
+        'training_seed': None,  # None = use seed (classic config); Pythia tseed runs used 42
         
         # ========== Federated Learning Setup ==========
         'num_clients': 7,  # Total number of federated learning clients (int)
@@ -1005,7 +1005,7 @@ def main(config_overrides: Optional[Dict] = None):
         'client_lr': 5e-5,  # Learning rate for local client training (float)
         'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
         'batch_size': 128,  # Batch size for local training (int)
-        'test_batch_size': 256,  # Batch size for test/validation data loaders (int); also the proxy-loader batch (proxy_max_batches_opt=1 -> first 256 of the proxy set)
+        'test_batch_size': 512,  # Batch size for test/validation data loaders (int); also the proxy-loader batch (proxy_max_batches_opt=1 -> all 512 of the proxy set; Pythia 260213 used 256)
         'local_epochs': 5,  # Number of local training epochs per round (int, per paper Section IV)
         'grad_clip_norm': 1.0,  # Benign client grad clipping. Decoder models: Pythia-160m try 0.5 if nan; Qwen2.5-0.5B typically stable at 1.0
         'alpha': 0.0,  # FedProx proximal coefficient μ: loss += (μ/2)*||w - w_global||². Set 0 for standard FedAvg, >0 to penalize local drift from global model (helps Non-IID stability)
@@ -1051,11 +1051,11 @@ def main(config_overrides: Optional[Dict] = None):
         # Model configuration
         # Supported models:
         # Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
-        # 'model_name': 'distilbert-base-uncased',  # distilbert 67M (paper DistilBERT setting)
+        'model_name': 'distilbert-base-uncased',  # distilbert 67M (paper DistilBERT setting)
         # # -------------------------------------------
         # Decoder-only (GPT-style): 'gpt2', 'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m', 'Qwen/Qwen2.5-0.5B'
         # 'model_name': 'gpt2',                      # GPT-2 124M — stable decoder baseline
-        'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (paper Pythia reference run 260213: grad_clip_norm 1.0)
+        # 'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (paper Pythia reference run 260213: grad_clip_norm 1.0)
         # 'model_name': 'facebook/opt-125m',         # OPT-125M (Meta)
         # 'model_name': 'Qwen/Qwen2.5-0.5B',  # Qwen2.5-0.5B ~494M (Alibaba, LLaMA-style arch, Apache 2.0) — use BASE for fine-tuning (or Qwen/Qwen2.5-0.5B-Instruct)
         # num_labels and max_length: set above in Dataset Configuration based on chosen dataset        
@@ -1077,7 +1077,7 @@ def main(config_overrides: Optional[Dict] = None):
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
         # Note: dim_reduction_size should be <= total trainable parameters
-        'dim_reduction_size': 500,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
+        'dim_reduction_size': 5000,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
         'vgae_epochs': 20,  # Number of epochs for VGAE training (reference: 20)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
         'vgae_hidden_dim': 64,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
@@ -1089,7 +1089,7 @@ def main(config_overrides: Optional[Dict] = None):
 
         # ========== AugMP proxy optimization parameters ==========
         'proxy_step': 0.001,  # Step size for gradient-free ascent toward global-loss proxy
-        'proxy_steps': 200,  # Number of optimization steps for AugMP proxy objective (int)
+        'proxy_steps': 100,  # Number of optimization steps for AugMP proxy objective (int)
         'attacker_proxy_grad_clip_norm': 1.0,  # AugMP proxy-parameter update only; separate from benign training
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
         # ----- Limited-observability ablation (opt-in; see observability.py / run_observability_sweep.py) -----
@@ -1104,10 +1104,10 @@ def main(config_overrides: Optional[Dict] = None):
 
         # ========== Formula 4 Constraint Parameters ==========
         'dist_bound': None,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ dist_bound (None = use benign max distance)
-        'sim_bound_low': 0.0,  # Manual lower bound for cosine similarity (None = use benign min). e.g. 0.0 to require non-negative similarity
+        'sim_bound_low': None,  # Manual lower bound for cosine similarity (None = use benign min). e.g. 0.0 to require non-negative similarity
         'sim_bound_up': None,   # Manual upper bound for cosine similarity (None = use benign mean)
         # Server cosine similarity mode: 'local_vs_global' (each client vs Δ_g) | 'pairwise' (local vs local, report mean to others) | 'both'
-        'server_similarity_mode': 'pairwise',  # Use 'pairwise' to avoid self-comparison; set to 'local_vs_global' to match AugMP constraint definition
+        'server_similarity_mode': 'local_vs_global',  # Use 'pairwise' to avoid self-comparison; set to 'local_vs_global' to match AugMP constraint definition
         
         # ========== Lagrangian Dual Parameters ==========
         'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
@@ -1116,12 +1116,12 @@ def main(config_overrides: Optional[Dict] = None):
         'lambda_dist_lr': 0.01,    # Learning rate for λ_dist(t) update (dual ascent step size)
         
         # ========== Cosine Similarity Constraint Parameters (TWO-SIDED with TWO multipliers) False by default ==========
-        'use_cosine_similarity_constraint': True,  # Whether to enable cosine similarity constraints (bool, True/False) False by default! open both to use pairwise sim
-        'use_pairwise_similarity_in_constraint': True,  # When True and similarity constraint on: use pairwise sim (align with server_similarity_mode='pairwise') open both to use pairwise sim
+        'use_cosine_similarity_constraint': False,  # Whether to enable cosine similarity constraints (bool, True/False) False by default! open both to use pairwise sim
+        'use_pairwise_similarity_in_constraint': False,  # When True and similarity constraint on: use pairwise sim (align with server_similarity_mode='pairwise') open both to use pairwise sim
         'lambda_sim_low_init': 0.1,  # Initial λ_sim_low(t) value for lower bound constraint: sim_bound_low <= sim_att
         'lambda_sim_up_init': 0.1,   # Initial λ_sim_up(t) value for upper bound constraint: sim_att <= sim_bound_up
-        'lambda_sim_low_lr': 0.01,    # Learning rate for λ_sim_low(t) update
-        'lambda_sim_up_lr': 0.01,     # Learning rate for λ_sim_up(t) update
+        'lambda_sim_low_lr': 0.1,    # Learning rate for λ_sim_low(t) update
+        'lambda_sim_up_lr': 0.1,     # Learning rate for λ_sim_up(t) update
 
         # ========== Augmented Lagrangian Method (ALM) Parameters ==========
         # Standard ALM adds quadratic penalties: (ρ/2) * g(x)^2 for each inequality constraint g(x) ≤ 0.
@@ -1136,7 +1136,7 @@ def main(config_overrides: Optional[Dict] = None):
         'rho_theta': 0.5,            # If σ_k > theta * σ_{k-1} then increase ρ
         'rho_increase_factor': 2.0,
         'rho_min': 1e-3,
-        'rho_max': 1e4,
+        'rho_max': 1e3,
 
         'profile_overhead': False,  # True: per-round wall-clock + peak-GPU-memory per component (attacker stages,
                                     # benign local training, aggregation, evaluation) printed every round, summary
