@@ -991,7 +991,7 @@ def main(config_overrides: Optional[Dict] = None):
         # ========== Experiment Configuration ==========
         'experiment_name': 'distilbert_ag_news_augmp_alpha0p3_seed42069_M5000_classic',  # Name for result files and logs (classic DistilBERT config, legacy name 'vgae_grmp_attack'; Pythia repeat of 260213 used 'pythia_ag_news_augmp_alpha0p3_seed42069_M500_repeat260213', training_seed runs '..._M500_tseed<N>')
         'seed': 42069,  # Random seed for reproducibility (int), 42/42069/1 are the default
-        'training_seed': None,  # None = use seed (classic config); Pythia tseed runs used 42
+        'training_seed': 1,  # None = use seed (classic config); Pythia tseed runs used 42
         
         # ========== Federated Learning Setup ==========
         'num_clients': 7,  # Total number of federated learning clients (int)
