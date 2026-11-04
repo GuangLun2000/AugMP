@@ -990,7 +990,7 @@ def main(config_overrides: Optional[Dict] = None):
     config = {
         # ========== Experiment Configuration ==========
         'experiment_name': 'pythia_ag_news_augmp_alpha0p3_seed42069_M500_repeat260213',  # Name for result files and logs (repeat of reference run 260213, legacy name 'vgae_grmp_attack'; training_seed runs used '..._M500_tseed<N>')
-        'seed': 42,  # Random seed for reproducibility (int), 42/42069/1 are the default
+        'seed': 1101,  # Random seed for reproducibility (int), 42/42069/1 are the default
         'training_seed': None,  # ORIGINAL VALUE: None
         
         # ========== Federated Learning Setup ==========
