@@ -990,7 +990,7 @@ def main(config_overrides: Optional[Dict] = None):
     config = {
         # ========== Experiment Configuration ==========
         'experiment_name': 'pythia_ag_news_augmp_alpha0p3_seed42069_M500_repeat260213',  # Name for result files and logs (repeat of reference run 260213, legacy name 'vgae_grmp_attack'; training_seed runs used '..._M500_tseed<N>')
-        'seed': 1101,  # Random seed for reproducibility (int), 42/42069/1 are the default
+        'seed': 42069,  # Random seed for reproducibility (int), 42/42069/1 are the default
         'training_seed': None,  # ORIGINAL VALUE: None
         
         # ========== Federated Learning Setup ==========
@@ -1091,7 +1091,7 @@ def main(config_overrides: Optional[Dict] = None):
         'proxy_step': 0.001,  # Step size for gradient-free ascent toward global-loss proxy
         'proxy_steps': 200,  # Number of optimization steps for AugMP proxy objective (int)
         'attacker_proxy_grad_clip_norm': 1.0,  # AugMP proxy-parameter update only; separate from benign training
-        'attacker_claimed_data_size': None,  # None = use actual assigned data size
+        'attacker_claimed_data_size': 4300,  # None = use actual assigned data size
         # ----- Limited-observability ablation (opt-in; see observability.py / run_observability_sweep.py) -----
         'attacker_observed_benign': None,  # None = attackers observe ALL benign updates (original behaviour). int k = observe k benign clients; float in (0,1] = observe that fraction
         'attacker_observation_mode': 'fixed',  # 'fixed' = same subset every round (compromised peers / tapped links); 'random' = re-drawn each round; 'largest' = k benign clients with most data
@@ -1116,7 +1116,7 @@ def main(config_overrides: Optional[Dict] = None):
         'lambda_dist_lr': 0.01,    # Learning rate for λ_dist(t) update (dual ascent step size)
         
         # ========== Cosine Similarity Constraint Parameters (TWO-SIDED with TWO multipliers) False by default ==========
-        'use_cosine_similarity_constraint': False,  # Whether to enable cosine similarity constraints (bool, True/False) False by default! open both to use pairwise sim
+        'use_cosine_similarity_constraint': True,  # Whether to enable cosine similarity constraints (bool, True/False) False by default! open both to use pairwise sim
         'use_pairwise_similarity_in_constraint': True,  # When True and similarity constraint on: use pairwise sim (align with server_similarity_mode='pairwise') open both to use pairwise sim
         'lambda_sim_low_init': 0.1,  # Initial λ_sim_low(t) value for lower bound constraint: sim_bound_low <= sim_att
         'lambda_sim_up_init': 0.1,   # Initial λ_sim_up(t) value for upper bound constraint: sim_att <= sim_bound_up
