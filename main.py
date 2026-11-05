@@ -1006,7 +1006,7 @@ def main(config_overrides: Optional[Dict] = None):
         'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
         'batch_size': 128,  # Batch size for local training (int)
         'test_batch_size': 512,  # Batch size for test/validation data loaders (int); also the proxy-loader batch (proxy_max_batches_opt=1 -> first 512 of the proxy set = whole proxy set). Yahoo reference run 260313: 512 (AG News repeat 260213: 256)
-        'local_epochs': 2,  # Number of local training epochs per round (int). Yahoo reference run 260313: 2 (AG News / paper Section IV: 5)
+        'local_epochs': 5,  # Number of local training epochs per round (int). Yahoo reference run 260313: 2 (AG News / paper Section IV: 5)
         'grad_clip_norm': 1.0,  # Benign client grad clipping. Decoder models: Pythia-160m try 0.5 if nan; Qwen2.5-0.5B typically stable at 1.0
         'alpha': 0.0,  # FedProx proximal coefficient μ: loss += (μ/2)*||w - w_global||². Set 0 for standard FedAvg, >0 to penalize local drift from global model (helps Non-IID stability)
         
