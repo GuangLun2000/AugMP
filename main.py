@@ -1091,7 +1091,7 @@ def main(config_overrides: Optional[Dict] = None):
         'proxy_step': 0.001,  # Step size for gradient-free ascent toward global-loss proxy
         'proxy_steps': 200,  # Number of optimization steps for AugMP proxy objective (int)
         'attacker_proxy_grad_clip_norm': 1.0,  # AugMP proxy-parameter update only; separate from benign training
-        'attacker_claimed_data_size': None,  # None = use actual assigned data size (Yahoo reference run 260313: None -> 3474/2510; AG News repeat 260213 used 4888)
+        'attacker_claimed_data_size': 5000,  # None = use actual assigned data size (Yahoo reference run 260313: None -> 3474/2510; AG News repeat 260213 used 4888)
         # ----- Limited-observability ablation (opt-in; see observability.py / run_observability_sweep.py) -----
         'attacker_observed_benign': None,  # None = attackers observe ALL benign updates (original behaviour). int k = observe k benign clients; float in (0,1] = observe that fraction
         'attacker_observation_mode': 'fixed',  # 'fixed' = same subset every round (compromised peers / tapped links); 'random' = re-drawn each round; 'largest' = k benign clients with most data
