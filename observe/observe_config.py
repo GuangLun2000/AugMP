@@ -24,7 +24,7 @@ from typing import Optional
 #                mass) | 'residual' (two pseudo rows: previous delta with negligible weight + the recovered
 #                mean update of the unobserved peers, weight = unobserved mass; makes k=1 non-degenerate)
 #   obs_seed     seed for drawing the observed subset (None = seed)
-#   attack       'AugMP' | 'ALIE' | 'Gaussian' | 'SignFlipping' | 'none' (benign baseline, k ignored)
+#   attack       'AugMP' | 'ALIE' | 'Gaussian' | 'SignFlipping' | 'GAP' | 'none' (benign baseline, k ignored)
 #   clients / attackers   paper setting: 7 agents = 5 benign + 2 attackers
 #   rounds       50 for every run (anchors and limited-observation runs alike)
 #   alpha        Dirichlet heterogeneity (Qwen reference run / paper Fig. 3(c): 0.3)
@@ -148,7 +148,7 @@ DATASET_PRESETS = {
     'imdb':          {'dataset': 'imdb', 'num_labels': 2, 'max_length': 256},
     'dbpedia':       {'dataset': 'dbpedia', 'num_labels': 14, 'max_length': 256},
 }
-ATTACK_CHOICES = ('AugMP', 'ALIE', 'Gaussian', 'SignFlipping', 'none')
+ATTACK_CHOICES = ('AugMP', 'ALIE', 'Gaussian', 'SignFlipping', 'GAP', 'none')
 
 
 def k_tag(k) -> str:

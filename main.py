@@ -360,6 +360,41 @@ def setup_experiment(config):
                     grad_clip_norm=config.get('grad_clip_norm', 1.0),
                     gaussian_std_scale=gaussian_std_scale
                 )
+            elif attack_method == 'GAP':
+                # ========== GAP (Gradient Assembly Poisoning) Attack ==========
+                # Two-stage: offline gradient-ascent degradation target, then online
+                # interpolate-and-distance-project (distance-only, no cosine). Needs its own
+                # DataLoader (own data) for g_own and the offline target. See attack_baseline_gap.py.
+                from attack_baseline_gap import GAPAttackerClient
+                print(f"  Client {client_id}: ATTACKER (GAP Attack)")
+                print(f"    Claimed data size D'_j(t): {claimed_data_size} (matches assigned data)")
+                client_texts_gap = [data_manager.train_texts[i] for i in client_indices[client_id]]
+                client_labels_gap = [data_manager.train_labels[i] for i in client_indices[client_id]]
+                dataset_gap = NewsDataset(client_texts_gap, client_labels_gap, data_manager.tokenizer,
+                                          max_length=config.get('max_length', 128))
+                client_loader_gap = DataLoader(dataset_gap, batch_size=config['batch_size'], shuffle=True)
+                gap_target_epochs = config.get('gap_target_epochs', None)  # None -> local_epochs
+                gap_interp_lambda = config.get('gap_interp_lambda', 1.0)
+                gap_dist_bound_stat = config.get('gap_dist_bound_stat', 'max')
+                gap_attack_start_round = config.get('gap_attack_start_round', None)
+                print(f"    GAP: target_epochs={gap_target_epochs if gap_target_epochs is not None else config['local_epochs']} (ascent), "
+                      f"interp_lambda={gap_interp_lambda}, dist_bound_stat={gap_dist_bound_stat} (distance-only, no cosine)")
+                client = GAPAttackerClient(
+                    client_id=client_id,
+                    model=global_model,
+                    data_manager=data_manager,
+                    data_indices=client_indices[client_id],
+                    lr=config['client_lr'],
+                    local_epochs=config['local_epochs'],
+                    alpha=config['alpha'],
+                    data_loader=client_loader_gap,
+                    gap_target_epochs=gap_target_epochs,
+                    gap_interp_lambda=gap_interp_lambda,
+                    gap_dist_bound_stat=gap_dist_bound_stat,
+                    attack_start_round=gap_attack_start_round,
+                    claimed_data_size=claimed_data_size,
+                    grad_clip_norm=config.get('grad_clip_norm', 1.0)
+                )
             else:
                 # ========== AugMP client (default proposed method; legacy attack_method='GRMP' normalized above) ==========
                 print(f"  Client {client_id}: AugMP participant (VGAE enabled)")
@@ -1061,7 +1096,7 @@ def main(config_overrides: Optional[Dict] = None):
         # num_labels and max_length: set above in Dataset Configuration based on chosen dataset        
 
         # ========== Attack Configuration ==========
-        'attack_method': 'AugMP',  # Proposed: 'AugMP' (legacy alias 'GRMP'). Baselines: 'ALIE', 'SignFlipping', 'Gaussian'
+        'attack_method': 'AugMP',  # Proposed: 'AugMP' (legacy alias 'GRMP'). Baselines: 'ALIE', 'SignFlipping', 'Gaussian', 'GAP'
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
         
         # ========== ALIE Attack Parameters (only used when attack_method='ALIE') ==========
@@ -1073,6 +1108,14 @@ def main(config_overrides: Optional[Dict] = None):
         # ========== Gaussian Attack Parameters (only used when attack_method='Gaussian') ==========
         'gaussian_attack_start_round': None,  # USENIX Security '20: Round to start Gaussian attack (None = start immediately)
         'gaussian_std_scale': 5.0,  # Scale factor for noise std: attack_vec ~ N(mean, (scale*std)²). scale>1 expands noise to increase impact (FedAvg). 1.0=original Fang et al.
+        # ========== GAP Attack Parameters (only used when attack_method='GAP') ==========
+        # GAP (Gradient Assembly Poisoning) for our coupled aggregation (see attack_baseline_gap.py).
+        # Two-stage: offline gradient-ascent degradation target, then online interpolate + Euclidean-distance
+        # projection. Distance-only constraint (NO cosine).
+        'gap_target_epochs': None,  # Phase-1 gradient-ascent epochs for the offline target. None = local_epochs (same order as local training). Search range swept: {1, 3, 5}
+        'gap_interp_lambda': 1.0,   # Phase-2 interpolation: m = (1-λ)·g_own + λ·target. 1.0 = approach target fully then distance-clip; 0 = honest. Search range: {0.5, 0.75, 1.0}
+        'gap_dist_bound_stat': 'max',  # Statistic of observed benign→Δ_g distances used as the distance ceiling: 'max' (matches framework benign_max), 'mean', 'median', 'p90'
+        'gap_attack_start_round': None,  # Round to start GAP attack (None = start immediately)
 
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
@@ -1189,6 +1232,8 @@ def main(config_overrides: Optional[Dict] = None):
             print("Running Sign-Flipping Attack (Model Poisoning Baseline)...")
         elif attack_method == 'Gaussian':
             print("Running Gaussian Attack (Random Model Poisoning Baseline)...")
+        elif attack_method == 'GAP':
+            print("Running GAP Attack (Gradient Assembly Poisoning, adapted baseline)...")
         else:
             print("Running AugMP (graph-augmented model manipulation) with VGAE...")
     else:

@@ -33,6 +33,7 @@
 ├── attack_baseline_alie.py            # ALIE baseline (NeurIPS ’19)
 ├── attack_baseline_gaussian.py        # Gaussian baseline (USENIX Security ’20)
 ├── attack_baseline_sign_flipping.py   # Sign-flipping baseline (ICML ’18)
+├── attack_baseline_gap.py             # GAP baseline (Gradient Assembly Poisoning)
 ├── observe/                           # Limited-observability experiment (runs through main.py via config)
 │   ├── observe_config.py              # make_config(): pinned config for one observe run
 │   ├── observability.py               # Observation policy (which benign updates attackers see)
