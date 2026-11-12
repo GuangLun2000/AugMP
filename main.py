@@ -989,8 +989,8 @@ def analyze_results(metrics):
 def main(config_overrides: Optional[Dict] = None):
     config = {
         # ========== Experiment Configuration ==========
-        'experiment_name': 'pythia_yahoo_answers_augmp_alpha0p3_seed42_M500_lora8_repeat260313',  # Name for result files and logs (repeat of Yahoo reference run 260313 lora8-16, legacy name 'vgae_grmp_attack'; AG News repeat used 'pythia_ag_news_augmp_alpha0p3_seed42069_M500_repeat260213')
-        'seed': 42,  # Random seed for reproducibility (int), 42/42069/1 are the default (Yahoo reference run 260313: 42)
+        'experiment_name': 'pythia_ag_news_augmp_alpha0p3_seed42069_M500_repeat260213',  # Name for result files and logs (aligned with AG News reference run 260213, legacy name 'vgae_grmp_attack'; Yahoo repeat used 'pythia_yahoo_answers_augmp_alpha0p3_seed42_M500_lora8_repeat260313')
+        'seed': 42069,  # Random seed for reproducibility (int), 42/42069/1 are the default (AG News reference run 260213: 42069; Yahoo reference run 260313: 42)
         'training_seed': None,  # ORIGINAL VALUE: None
         
         # ========== Federated Learning Setup ==========
@@ -1005,7 +1005,7 @@ def main(config_overrides: Optional[Dict] = None):
         'client_lr': 5e-5,  # Learning rate for local client training (float)
         'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
         'batch_size': 128,  # Batch size for local training (int)
-        'test_batch_size': 512,  # Batch size for test/validation data loaders (int); also the proxy-loader batch (proxy_max_batches_opt=1 -> first 512 of the proxy set = whole proxy set). Yahoo reference run 260313: 512 (AG News repeat 260213: 256)
+        'test_batch_size': 256,  # Batch size for test/validation data loaders (int); also the proxy-loader batch (proxy_max_batches_opt=1 -> first 256 of the proxy set). AG News reference run 260213: 256 (Yahoo reference run 260313: 512)
         'local_epochs': 5,  # Number of local training epochs per round (int). Yahoo reference run 260313: 2 (AG News / paper Section IV: 5)
         'grad_clip_norm': 1.0,  # Benign client grad clipping. Decoder models: Pythia-160m try 0.5 if nan; Qwen2.5-0.5B typically stable at 1.0
         'alpha': 0.0,  # FedProx proximal coefficient μ: loss += (μ/2)*||w - w_global||². Set 0 for standard FedAvg, >0 to penalize local drift from global model (helps Non-IID stability)
@@ -1013,9 +1013,9 @@ def main(config_overrides: Optional[Dict] = None):
         # ========== Dataset Configuration ==========
         # Choose dataset: 'ag_news' | 'imdb' | 'dbpedia' | 'yahoo_answers' — set num_labels and max_length accordingly
         # Dataset 1: AG News
-        # 'dataset': 'ag_news',  # news classification (4 classes)
-        # 'num_labels': 4,       # AG News: 4 | IMDB: 2 | DBpedia: 14 | Yahoo Answers: 10
-        # 'max_length': 128,     # AG News: 128 | IMDB: 512/256 | DBpedia: 512 | Yahoo Answers: 256
+        'dataset': 'ag_news',  # news classification (4 classes). AG News reference run 260213
+        'num_labels': 4,       # AG News: 4 | IMDB: 2 | DBpedia: 14 | Yahoo Answers: 10
+        'max_length': 128,     # AG News: 128 | IMDB: 512/256 | DBpedia: 512 | Yahoo Answers: 256
         # -------------------------------------------
         # Dataset 2: IMDB
         # 'dataset': 'imdb',   # sentiment (2 classes)
@@ -1028,9 +1028,9 @@ def main(config_overrides: Optional[Dict] = None):
         # 'max_length': 512,
         # -------------------------------------------
         # Dataset 4: Yahoo Answers (10 classes, 1.4M train / 60K test)
-        'dataset': 'yahoo_answers',   # topic classification (10 classes, yassiracharki/Yahoo_Answers_10_categories_for_NLP)
-        'num_labels': 10,       # Yahoo Answers: 10 classes
-        'max_length': 128,      # Yahoo reference runs 260302-260313 use 128 (earlier 260227 run used 256)
+        # 'dataset': 'yahoo_answers',   # topic classification (10 classes, yassiracharki/Yahoo_Answers_10_categories_for_NLP)
+        # 'num_labels': 10,       # Yahoo Answers: 10 classes
+        # 'max_length': 128,      # Yahoo reference runs 260302-260313 use 128 (earlier 260227 run used 256)
         
         # ========== Data Distribution ==========
         'data_distribution': 'non-iid',  # 'iid' for uniform random, 'non-iid' for Dirichlet-based heterogeneous distribution
@@ -1091,7 +1091,7 @@ def main(config_overrides: Optional[Dict] = None):
         'proxy_step': 0.001,  # Step size for gradient-free ascent toward global-loss proxy
         'proxy_steps': 200,  # Number of optimization steps for AugMP proxy objective (int)
         'attacker_proxy_grad_clip_norm': 1.0,  # AugMP proxy-parameter update only; separate from benign training
-        'attacker_claimed_data_size': 5000,  # None = use actual assigned data size (Yahoo reference run 260313: None -> 3474/2510; AG News repeat 260213 used 4888)
+        'attacker_claimed_data_size': None,  # None = use actual assigned data size
         # ----- Limited-observability ablation (opt-in; see observability.py / run_observability_sweep.py) -----
         'attacker_observed_benign': None,  # None = attackers observe ALL benign updates (original behaviour). int k = observe k benign clients; float in (0,1] = observe that fraction
         'attacker_observation_mode': 'fixed',  # 'fixed' = same subset every round (compromised peers / tapped links); 'random' = re-drawn each round; 'largest' = k benign clients with most data
@@ -1104,7 +1104,7 @@ def main(config_overrides: Optional[Dict] = None):
 
         # ========== Formula 4 Constraint Parameters ==========
         'dist_bound': None,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ dist_bound (None = use benign max distance)
-        'sim_bound_low': None,  # Manual lower bound for cosine similarity (None = use benign min). e.g. 0.0 to require non-negative similarity. Yahoo reference run 260313: None (log: bounds=[benign_min_mean])
+        'sim_bound_low': 0.0,  # Manual lower bound for cosine similarity (None = use benign min). e.g. 0.0 to require non-negative similarity. AG News reference run 260213: 0.0 (log: bounds=[manual]=[0.0000, mean]); Yahoo reference run 260313: None (log: bounds=[benign_min_mean])
         'sim_bound_up': None,   # Manual upper bound for cosine similarity (None = use benign mean)
         # Server cosine similarity mode: 'local_vs_global' (each client vs Δ_g) | 'pairwise' (local vs local, report mean to others) | 'both'
         'server_similarity_mode': 'pairwise',  # Use 'pairwise' to avoid self-comparison; set to 'local_vs_global' to match AugMP constraint definition
@@ -1126,7 +1126,7 @@ def main(config_overrides: Optional[Dict] = None):
         # ========== Augmented Lagrangian Method (ALM) Parameters ==========
         # Standard ALM adds quadratic penalties: (ρ/2) * g(x)^2 for each inequality constraint g(x) ≤ 0.
         'use_augmented_lagrangian': True,   # Enable Augmented Lagrangian (requires use_lagrangian_dual=True)
-        'lambda_update_mode': 'alm',    # Dual variable update: "classic"=λ += lr*g (fixed step), "alm"=λ += ρ*g (penalty-scaled step, standard ALM). Yahoo reference run 260313: 'alm' (log: λ_dist 0.1→0.2704 with g=0.1704, ρ=1)
+        'lambda_update_mode': 'classic',    # Dual variable update: "classic"=λ += lr*g (fixed step), "alm"=λ += ρ*g (penalty-scaled step, standard ALM). AG News reference run 260213: 'classic' (log: λ_dist 0.1→0.1020 with g=0.1961, lr=0.01); Yahoo reference run 260313: 'alm' (log: λ_dist 0.1→0.2704 with g=0.1704, ρ=1)
         # Penalty parameters ρ (per-constraint): controls quadratic penalty strength (ρ/2)*max(0,g)^2 in ALM objective
         'rho_dist_init': 1.0,
         'rho_sim_low_init': 1.0,
@@ -1135,7 +1135,7 @@ def main(config_overrides: Optional[Dict] = None):
         'rho_adaptive': True,
         'rho_theta': 0.5,            # If σ_k > theta * σ_{k-1} then increase ρ
         'rho_increase_factor': 2.0,
-        'rho_min': 1e-4,  # as in the 2026-03 code used for reference run 260313 (no effect while rho_adaptive only increases ρ)
+        'rho_min': 1e-3,  # AG News repeat of 260213 used 1e-3 (Yahoo reference run 260313: 1e-4); no effect while rho_adaptive only increases ρ
         'rho_max': 1e4,
 
         'profile_overhead': False,  # True: per-round wall-clock + peak-GPU-memory per component (attacker stages,
