@@ -364,7 +364,8 @@ def setup_experiment(config):
                 # ========== GAP (Gradient Assembly Poisoning) Attack ==========
                 # Two-stage: offline gradient-ascent degradation target, then online
                 # interpolate-and-distance-project (distance-only, no cosine). Needs its own
-                # DataLoader (own data) for g_own and the offline target. See attack_baseline_gap.py.
+                # DataLoader (own data) ONLY for the one-off offline target; GAP attackers do
+                # no per-round local training. See attack_baseline_gap.py.
                 from attack_baseline_gap import GAPAttackerClient
                 print(f"  Client {client_id}: ATTACKER (GAP Attack)")
                 print(f"    Claimed data size D'_j(t): {claimed_data_size} (matches assigned data)")
@@ -1113,7 +1114,7 @@ def main(config_overrides: Optional[Dict] = None):
         # Two-stage: offline gradient-ascent degradation target, then online interpolate + Euclidean-distance
         # projection. Distance-only constraint (NO cosine).
         'gap_target_epochs': None,  # Phase-1 gradient-ascent epochs for the offline target. None = local_epochs (same order as local training). Search range swept: {1, 3, 5}
-        'gap_interp_lambda': 1.0,   # Phase-2 interpolation: m = (1-λ)·g_own + λ·target. 1.0 = approach target fully then distance-clip; 0 = honest. Search range: {0.5, 0.75, 1.0}
+        'gap_interp_lambda': 1.0,   # Phase-2: m = (1-λ)·g_own + λ·target before the distance projection. GAP attackers do no local training, so g_own=0 and this is m = λ·target. 1.0 = matches GAP's definition (minimise ||m-target|| s.t. the bound)
         'gap_dist_bound_stat': 'max',  # Statistic of observed benign→Δ_g distances used as the distance ceiling: 'max' (matches framework benign_max), 'mean', 'median', 'p90'
         'gap_attack_start_round': None,  # Round to start GAP attack (None = start immediately)
 

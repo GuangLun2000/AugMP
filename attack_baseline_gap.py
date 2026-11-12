@@ -67,17 +67,19 @@ class GAPAttackerClient(BenignClient):
     Two-stage attack:
       * Phase 1 (offline, once): gradient ascent on the attacker's own data -> fixed
         "degradation direction" full-update (the target update).
-      * Phase 2 (online, per round): interpolate current honest update g_own with the
-        target, then clip by a Euclidean-distance ball whose radius is estimated from the
-        observed benign updates. No cosine constraint.
+      * Phase 2 (online, per round): take the fixed target and project it into a Euclidean
+        distance ball whose centre and radius are estimated from the observed benign
+        updates. No cosine constraint.
 
-    Inherits BenignClient so the inherited local_train() produces the honest local update
-    g_own (the "current local update" interpolated against the target each round).
+    The attacker's own data is used ONLY once, offline, to build the Phase-1 target. GAP's
+    online phase has no role for an honest local update, so local_train() is overridden to
+    return a zero update (as in the AugMP / ALIE / Gaussian attacker clients) rather than
+    running per-round local training whose result would be discarded.
     """
 
     def __init__(self, client_id: int, model, data_manager,
                  data_indices, lr, local_epochs, alpha,
-                 data_loader,                      # required: own data, for g_own AND the offline ascent target
+                 data_loader,                      # required: own data, used ONLY by the offline ascent target
                  gap_target_epochs: Optional[int] = None,   # ascent epochs for Phase 1 (None -> local_epochs)
                  gap_interp_lambda: float = 1.0,            # interpolation weight toward the target in Phase 2
                  gap_dist_bound_stat: str = 'max',          # statistic of benign distances used as the bound
@@ -88,19 +90,21 @@ class GAPAttackerClient(BenignClient):
         Args:
             client_id, model, data_manager, data_indices, lr, local_epochs, alpha:
                 standard client arguments (data_manager kept for API parity with main.py).
-            data_loader: DataLoader over the attacker's own assigned data. Used both for the
-                inherited honest local training (g_own) and for the offline ascent target.
+            data_loader: DataLoader over the attacker's own assigned data. Used ONLY by the
+                one-off offline ascent that builds the Phase-1 target (no per-round training).
             gap_target_epochs: number of gradient-ASCENT epochs for the offline target
                 (Phase 1). None -> local_epochs (same order of magnitude as local training).
-            gap_interp_lambda: λ in m = (1-λ)·g_own + λ·target. λ=1.0 => approach the target
-                fully each round (then distance-clip); λ=0.0 => honest. Default 1.0.
+            gap_interp_lambda: λ in m = (1-λ)·g_own + λ·target, applied before the distance
+                projection. Since local_train() returns a zero update, g_own = 0 and this
+                reduces to m = λ·target. λ=1.0 (the default) is the setting that matches
+                GAP's definition: minimise ||m - target|| subject to the distance bound.
             gap_dist_bound_stat: which statistic of the observed benign-to-Δ_g distances to
                 use as the distance ceiling: 'max' (default, matches framework benign_max),
                 'mean', 'median', or 'p90'.
             attack_start_round: round to start attacking (None = immediately). Before it the
                 attacker submits its honest update.
             claimed_data_size: data size claimed for weighted FedAvg aggregation.
-            grad_clip_norm: gradient clipping norm (shared by g_own training and the ascent).
+            grad_clip_norm: gradient clipping norm used by the offline ascent.
         """
         super().__init__(
             client_id=client_id,
@@ -141,7 +145,20 @@ class GAPAttackerClient(BenignClient):
         """Prepare for a new round."""
         self.set_round(round_num)
 
-    # local_train: inherited from BenignClient -> honest local update g_own on own data.
+    def local_train(self, epochs=None) -> torch.Tensor:
+        """
+        GAP attackers do NOT perform per-round local training.
+
+        GAP's online phase minimises ||m - target|| subject to the distance bound; an honest
+        local update plays no role in it. The attacker's own data is used only once, offline,
+        by _compute_target_update(). Returning a zero update here matches the AugMP / ALIE /
+        Gaussian attacker clients and avoids both the wasted compute and the perturbation of
+        the shared RNG stream that per-round training whose result is discarded would cause.
+
+        Returns:
+            Zero update with the correct dimension (LoRA params in LoRA mode, else all params)
+        """
+        return torch.zeros(self.model.get_flat_params().numel())
 
     def receive_benign_updates(self, updates: List[torch.Tensor],
                                client_ids: Optional[List[int]] = None):
@@ -268,14 +285,15 @@ class GAPAttackerClient(BenignClient):
         """
         Produce the GAP malicious update.
 
-        poisoned_update is the attacker's honest local update g_own (from the inherited
-        local_train). Steps:
+        poisoned_update is the zero update returned by local_train() (GAP does no per-round
+        local training), so g_own = 0 and step 2 reduces to m = λ·target. Steps:
           1. (first active round) build & cache the offline degradation target.
-          2. interpolate: m = (1-λ)·g_own + λ·target.
+          2. form the candidate: m = (1-λ)·g_own + λ·target  (= target at the default λ=1).
           3. project m into the Euclidean ball of radius `bound` around Δ_g (estimated as
              the mean of observed benign updates). Distance only — no cosine constraint.
         """
-        # Hold fire until the configured start round (submit the honest update meanwhile).
+        # Hold fire until the configured start round (submits the zero update meanwhile,
+        # as in the ALIE / Gaussian baselines).
         if self.attack_start_round is not None and self.current_round < self.attack_start_round:
             return poisoned_update
 
@@ -301,7 +319,7 @@ class GAPAttackerClient(BenignClient):
                 f"{int(target.numel())} vs expected {self._flat_numel}."
             )
 
-        # --- Phase 2a: interpolate current honest update with the fixed degradation target.
+        # --- Phase 2a: candidate = the fixed degradation target (g_own is zero: no local training).
         lam = self.gap_interp_lambda
         candidate = (1.0 - lam) * g_own + lam * target
 
@@ -317,7 +335,7 @@ class GAPAttackerClient(BenignClient):
                 candidate = ref + (bound / cand_dist) * (candidate - ref)
                 projected = True
             final_dist = float(torch.norm(candidate - ref))
-            print(f"    [GAP Attacker {self.client_id}] λ={lam:.2f}, ||g_own||={float(torch.norm(g_own)):.4f}, "
+            print(f"    [GAP Attacker {self.client_id}] λ={lam:.2f}, "
                   f"||target||={float(torch.norm(target)):.4f}, bound[{self.gap_dist_bound_stat}]={bound:.4f}, "
                   f"dist(cand,Δ_g): {cand_dist:.4f}->{final_dist:.4f} ({'projected' if projected else 'within bound'}), "
                   f"||m||={float(torch.norm(candidate)):.4f}")
