@@ -364,8 +364,7 @@ def setup_experiment(config):
                 # ========== GAP (Gradient Assembly Poisoning) Attack ==========
                 # Two-stage: offline gradient-ascent degradation target, then online
                 # interpolate-and-distance-project (distance-only, no cosine). Needs its own
-                # DataLoader (own data) ONLY for the one-off offline target; GAP attackers do
-                # no per-round local training. See attack_baseline_gap.py.
+                # DataLoader (own data) for g_own and the offline target. See attack_baseline_gap.py.
                 from attack_baseline_gap import GAPAttackerClient
                 print(f"  Client {client_id}: ATTACKER (GAP Attack)")
                 print(f"    Claimed data size D'_j(t): {claimed_data_size} (matches assigned data)")
@@ -1025,7 +1024,7 @@ def analyze_results(metrics):
 def main(config_overrides: Optional[Dict] = None):
     config = {
         # ========== Experiment Configuration ==========
-        'experiment_name': 'distilbert_ag_news_gap_alpha0p3_seed42069_M5000_ref260212',  # Name for result files and logs (GAP baseline on the DistilBERT reference-260212 config; flipping attack_method back to 'AugMP' reproduces that reference run)
+        'experiment_name': 'pythia_ag_news_gap_alpha0p3_seed42069_M500_repeat260213',  # Name for result files and logs (GAP baseline on the AG News reference-260213 config; AugMP run used '..._augmp_...'. Only the output label differs from the AugMP run — all experiment variables are identical)
         'seed': 42069,  # Random seed for reproducibility (int), 42/42069/1 are the default (AG News reference run 260213: 42069; Yahoo reference run 260313: 42)
         'training_seed': None,  # ORIGINAL VALUE: None
         
@@ -1041,7 +1040,7 @@ def main(config_overrides: Optional[Dict] = None):
         'client_lr': 5e-5,  # Learning rate for local client training (float)
         'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
         'batch_size': 128,  # Batch size for local training (int)
-        'test_batch_size': 512,  # Batch size for test/validation data loaders (int); also the proxy-loader batch (proxy_max_batches_opt=1 -> first 512 of the proxy set). DistilBERT reference run 260212: 512 (Pythia AG News 260213: 256)
+        'test_batch_size': 256,  # Batch size for test/validation data loaders (int); also the proxy-loader batch (proxy_max_batches_opt=1 -> first 256 of the proxy set). AG News reference run 260213: 256 (Yahoo reference run 260313: 512)
         'local_epochs': 5,  # Number of local training epochs per round (int). Yahoo reference run 260313: 2 (AG News / paper Section IV: 5)
         'grad_clip_norm': 1.0,  # Benign client grad clipping. Decoder models: Pythia-160m try 0.5 if nan; Qwen2.5-0.5B typically stable at 1.0
         'alpha': 0.0,  # FedProx proximal coefficient μ: loss += (μ/2)*||w - w_global||². Set 0 for standard FedAvg, >0 to penalize local drift from global model (helps Non-IID stability)
@@ -1087,11 +1086,11 @@ def main(config_overrides: Optional[Dict] = None):
         # Model configuration
         # Supported models:
         # Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
-        'model_name': 'distilbert-base-uncased',  # distilbert 67M (paper DistilBERT setting; reference run 260212)
+        # 'model_name': 'distilbert-base-uncased',  # distilbert 67M (paper DistilBERT setting)
         # # -------------------------------------------
         # Decoder-only (GPT-style): 'gpt2', 'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m', 'Qwen/Qwen2.5-0.5B'
         # 'model_name': 'gpt2',                      # GPT-2 124M — stable decoder baseline
-        # 'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (reference runs 260213 AG News / 260313 Yahoo: grad_clip_norm 1.0)
+        'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (reference runs 260213 AG News / 260313 Yahoo: grad_clip_norm 1.0)
         # 'model_name': 'facebook/opt-125m',         # OPT-125M (Meta)
         # 'model_name': 'Qwen/Qwen2.5-0.5B',  # Qwen2.5-0.5B ~494M (Alibaba, LLaMA-style arch, Apache 2.0) — use BASE for fine-tuning (or Qwen/Qwen2.5-0.5B-Instruct)
         # num_labels and max_length: set above in Dataset Configuration based on chosen dataset        
@@ -1114,14 +1113,14 @@ def main(config_overrides: Optional[Dict] = None):
         # Two-stage: offline gradient-ascent degradation target, then online interpolate + Euclidean-distance
         # projection. Distance-only constraint (NO cosine).
         'gap_target_epochs': None,  # Phase-1 gradient-ascent epochs for the offline target. None = local_epochs (same order as local training). Search range swept: {1, 3, 5}
-        'gap_interp_lambda': 1.0,   # Phase-2: m = (1-λ)·g_own + λ·target before the distance projection. GAP attackers do no local training, so g_own=0 and this is m = λ·target. 1.0 = matches GAP's definition (minimise ||m-target|| s.t. the bound)
+        'gap_interp_lambda': 1.0,   # Phase-2 interpolation: m = (1-λ)·g_own + λ·target. 1.0 = approach target fully then distance-clip; 0 = honest. Search range: {0.5, 0.75, 1.0}
         'gap_dist_bound_stat': 'max',  # Statistic of observed benign→Δ_g distances used as the distance ceiling: 'max' (matches framework benign_max), 'mean', 'median', 'p90'
         'gap_attack_start_round': None,  # Round to start GAP attack (None = start immediately)
 
         # ========== VGAE Training Parameters ==========
         # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
         # Note: dim_reduction_size should be <= total trainable parameters
-        'dim_reduction_size': 5000,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed). DistilBERT reference run 260212: 5000 (Pythia AG News 260213: 500)
+        'dim_reduction_size': 500,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
         'vgae_epochs': 20,  # Number of epochs for VGAE training (reference: 20)
         'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
         'vgae_hidden_dim': 64,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
@@ -1133,7 +1132,7 @@ def main(config_overrides: Optional[Dict] = None):
 
         # ========== AugMP proxy optimization parameters ==========
         'proxy_step': 0.001,  # Step size for gradient-free ascent toward global-loss proxy
-        'proxy_steps': 100,  # Number of optimization steps for AugMP proxy objective (int). DistilBERT reference run 260212: 100 (log: steps=100, "Step k/99"); Pythia AG News 260213: 200
+        'proxy_steps': 200,  # Number of optimization steps for AugMP proxy objective (int)
         'attacker_proxy_grad_clip_norm': 1.0,  # AugMP proxy-parameter update only; separate from benign training
         'attacker_claimed_data_size': None,  # None = use actual assigned data size
         # ----- Limited-observability ablation (opt-in; see observability.py / run_observability_sweep.py) -----
@@ -1148,10 +1147,10 @@ def main(config_overrides: Optional[Dict] = None):
 
         # ========== Formula 4 Constraint Parameters ==========
         'dist_bound': None,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ dist_bound (None = use benign max distance)
-        'sim_bound_low': None,  # Manual lower bound for cosine similarity (None = use benign min). Unused in the DistilBERT reference run 260212 (its similarity constraint is OFF, see below); Pythia AG News 260213 used 0.0
+        'sim_bound_low': 0.0,  # Manual lower bound for cosine similarity (None = use benign min). e.g. 0.0 to require non-negative similarity. AG News reference run 260213: 0.0 (log: bounds=[manual]=[0.0000, mean]); Yahoo reference run 260313: None (log: bounds=[benign_min_mean])
         'sim_bound_up': None,   # Manual upper bound for cosine similarity (None = use benign mean)
         # Server cosine similarity mode: 'local_vs_global' (each client vs Δ_g) | 'pairwise' (local vs local, report mean to others) | 'both'
-        'server_similarity_mode': 'local_vs_global',  # DistilBERT reference run 260212: 'local_vs_global' (log: "Computing cosine similarities (weighted aggregation, matches attack optimization)"). NOTE: this also sets how the per-client cosine is REPORTED, so keep it matched to the reference you compare against. Pythia AG News 260213 used 'pairwise'
+        'server_similarity_mode': 'pairwise',  # Use 'pairwise' to avoid self-comparison; set to 'local_vs_global' to match AugMP constraint definition
         
         # ========== Lagrangian Dual Parameters ==========
         'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
@@ -1160,8 +1159,8 @@ def main(config_overrides: Optional[Dict] = None):
         'lambda_dist_lr': 0.01,    # Learning rate for λ_dist(t) update (dual ascent step size)
         
         # ========== Cosine Similarity Constraint Parameters (TWO-SIDED with TWO multipliers) False by default ==========
-        'use_cosine_similarity_constraint': False,  # DistilBERT reference run 260212: False (its log has no λ_sim/g_sim terms; early stopping checks dist only). Pythia AG News 260213 / Yahoo 260313: True
-        'use_pairwise_similarity_in_constraint': False,  # When True and similarity constraint on: use pairwise sim (align with server_similarity_mode='pairwise'). Off in reference run 260212
+        'use_cosine_similarity_constraint': True,  # Whether to enable cosine similarity constraints (bool, True/False). Yahoo reference run 260313: True (log shows sim_att∈[benign_min, benign_mean]); open both to use pairwise sim
+        'use_pairwise_similarity_in_constraint': True,  # When True and similarity constraint on: use pairwise sim (align with server_similarity_mode='pairwise') open both to use pairwise sim
         'lambda_sim_low_init': 0.1,  # Initial λ_sim_low(t) value for lower bound constraint: sim_bound_low <= sim_att
         'lambda_sim_up_init': 0.1,   # Initial λ_sim_up(t) value for upper bound constraint: sim_att <= sim_bound_up
         'lambda_sim_low_lr': 0.01,    # Learning rate for λ_sim_low(t) update
@@ -1180,7 +1179,7 @@ def main(config_overrides: Optional[Dict] = None):
         'rho_theta': 0.5,            # If σ_k > theta * σ_{k-1} then increase ρ
         'rho_increase_factor': 2.0,
         'rho_min': 1e-3,  # AG News repeat of 260213 used 1e-3 (Yahoo reference run 260313: 1e-4); no effect while rho_adaptive only increases ρ
-        'rho_max': 1e3,  # DistilBERT reference run 260212: 1e3 (log: ρ_dist saturates at 1000.0); Pythia AG News 260213: 1e4
+        'rho_max': 1e4,
 
         'profile_overhead': False,  # True: per-round wall-clock + peak-GPU-memory per component (attacker stages,
                                     # benign local training, aggregation, evaluation) printed every round, summary
