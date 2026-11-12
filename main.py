@@ -1024,7 +1024,7 @@ def analyze_results(metrics):
 def main(config_overrides: Optional[Dict] = None):
     config = {
         # ========== Experiment Configuration ==========
-        'experiment_name': 'pythia_ag_news_augmp_alpha0p3_seed42069_M500_repeat260213',  # Name for result files and logs (aligned with AG News reference run 260213, legacy name 'vgae_grmp_attack'; Yahoo repeat used 'pythia_yahoo_answers_augmp_alpha0p3_seed42_M500_lora8_repeat260313')
+        'experiment_name': 'pythia_ag_news_gap_alpha0p3_seed42069_M500_repeat260213',  # Name for result files and logs (GAP baseline on the AG News reference-260213 config; AugMP run used '..._augmp_...'. Only the output label differs from the AugMP run — all experiment variables are identical)
         'seed': 42069,  # Random seed for reproducibility (int), 42/42069/1 are the default (AG News reference run 260213: 42069; Yahoo reference run 260313: 42)
         'training_seed': None,  # ORIGINAL VALUE: None
         
@@ -1096,7 +1096,7 @@ def main(config_overrides: Optional[Dict] = None):
         # num_labels and max_length: set above in Dataset Configuration based on chosen dataset        
 
         # ========== Attack Configuration ==========
-        'attack_method': 'AugMP',  # Proposed: 'AugMP' (legacy alias 'GRMP'). Baselines: 'ALIE', 'SignFlipping', 'Gaussian', 'GAP'
+        'attack_method': 'GAP',  # Proposed: 'AugMP' (legacy alias 'GRMP'). Baselines: 'ALIE', 'SignFlipping', 'Gaussian', 'GAP'
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
         
         # ========== ALIE Attack Parameters (only used when attack_method='ALIE') ==========
