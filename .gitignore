@@ -1,5 +1,14 @@
+# OS / Python caches
 .DS_Store
 *.pyc
+__pycache__/
+.pytest_cache/
+
+# Experiment outputs and auto-downloaded data
+/results/
+/data/Yahoo_Answers_Datasets/
+
+# Local working folders
 /Revision
 /observe_results
 /results_temp

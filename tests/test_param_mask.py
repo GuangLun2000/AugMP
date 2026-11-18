@@ -1,5 +1,5 @@
-# observe/test_param_mask.py -- torch-path checks for parameter-level partial observation.
-# Run from the repo root:  python observe/test_param_mask.py
+# tests/test_param_mask.py -- torch-path checks for parameter-level partial observation (observe/observability.py).
+# Run from the repo root:  python -m pytest tests/test_param_mask.py -q   (or: python tests/test_param_mask.py)
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -8,7 +8,7 @@ import torch
 from observe.observability import ObservationPolicy, build_observation_policy
 
 
-def main():
+def test_param_mask():
     torch.manual_seed(0)
     dim, n = 10_000, 5
     originals = [torch.randn(dim) * (0.1 + 0.05 * i) for i in range(n)]
@@ -73,4 +73,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    test_param_mask()

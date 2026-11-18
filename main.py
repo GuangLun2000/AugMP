@@ -1025,7 +1025,7 @@ def main(config_overrides: Optional[Dict] = None):
     config = {
         # ========== Experiment Configuration ==========
         'experiment_name': 'distilbert_ag_news_gap_alpha0p3_seed42069_M5000_repeat260212',  # Name for result files and logs (GAP baseline on the DistilBERT reference-260212 config; the AugMP counterpart is that reference run itself. Only the output label differs — all experiment variables match 260212)
-        'seed': 42,  # Random seed for reproducibility (int), 42/42069/1 are the default (AG News reference run 260213: 42069; Yahoo reference run 260313: 42)
+        'seed': 42069,  # Random seed for reproducibility (int), 42/42069/1 are the default (AG News reference run 260213: 42069; Yahoo reference run 260313: 42)
         'training_seed': None,  # ORIGINAL VALUE: None
         
         # ========== Federated Learning Setup ==========
@@ -1096,7 +1096,7 @@ def main(config_overrides: Optional[Dict] = None):
         # num_labels and max_length: set above in Dataset Configuration based on chosen dataset        
 
         # ========== Attack Configuration ==========
-        'attack_method': 'GAP',  # Proposed: 'AugMP' (legacy alias 'GRMP'). Baselines: 'ALIE', 'SignFlipping', 'Gaussian', 'GAP'
+        'attack_method': 'AugMP',  # Proposed: 'AugMP' (legacy alias 'GRMP'). Baselines: 'ALIE', 'SignFlipping', 'Gaussian', 'GAP'
         'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
         
         # ========== ALIE Attack Parameters (only used when attack_method='ALIE') ==========
