@@ -65,7 +65,10 @@ def setup_experiment(config):
         test_batch_size=config['test_batch_size'],
         model_name=config.get('model_name', 'distilbert-base-uncased'),
         max_length=config.get('max_length', 128),
-        dataset=config.get('dataset', 'ag_news')
+        dataset=config.get('dataset', 'ag_news'),
+        # AugMP proxy set: True = independent dataset (no overlap with the evaluation set or client data); False = original setting
+        proxy_independent=config.get('attacker_proxy_independent', False),
+        proxy_sample_size=config.get('proxy_sample_size', 512)
     )
 
     # 2. Partition data among clients
@@ -1024,9 +1027,9 @@ def analyze_results(metrics):
 def main(config_overrides: Optional[Dict] = None):
     config = {
         # ========== Experiment Configuration ==========
-        'experiment_name': 'distilbert_ag_news_gap_alpha0p3_seed42069_M5000_repeat260212',  # Name for result files and logs (GAP baseline on the DistilBERT reference-260212 config; the AugMP counterpart is that reference run itself. Only the output label differs — all experiment variables match 260212)
-        'seed': 42069,  # Random seed for reproducibility (int), 42/42069/1 are the default (AG News reference run 260213: 42069; Yahoo reference run 260313: 42)
-        'training_seed': None,  # ORIGINAL VALUE: None
+        'experiment_name': 'AugMP',  # Name for result files and logs
+        'seed': 42069,  # Random seed for reproducibility (int), 42/42069/1 are the default
+        'training_seed': None,  # Optional separate seed for model init / dropout / DataLoader shuffle (None = use seed)
         
         # ========== Federated Learning Setup ==========
         'num_clients': 7,  # Total number of federated learning clients (int)
@@ -1040,17 +1043,17 @@ def main(config_overrides: Optional[Dict] = None):
         'client_lr': 5e-5,  # Learning rate for local client training (float)
         'server_lr': 1.0,  # Server learning rate for model aggregation (fixed at 1.0)
         'batch_size': 128,  # Batch size for local training (int)
-        'test_batch_size': 512,  # Batch size for test/validation data loaders (int); also the proxy-loader batch (proxy_max_batches_opt=1 -> first 512 of the proxy set). DistilBERT reference run 260212: 512 (Pythia AG News 260213: 256)
-        'local_epochs': 5,  # Number of local training epochs per round (int). Yahoo reference run 260313: 2 (AG News / paper Section IV: 5)
-        'grad_clip_norm': 1.0,  # Benign client grad clipping. Decoder models: Pythia-160m try 0.5 if nan; Qwen2.5-0.5B typically stable at 1.0
+        'test_batch_size': 256,  # Batch size for test/validation data loaders (int); also the batch size of the proxy loader
+        'local_epochs': 5,  # Number of local training epochs per round (int)
+        'grad_clip_norm': 1.0,  # Benign client grad clipping (max norm). Decoder models: Pythia-160m try 0.5 if nan
         'alpha': 0.0,  # FedProx proximal coefficient μ: loss += (μ/2)*||w - w_global||². Set 0 for standard FedAvg, >0 to penalize local drift from global model (helps Non-IID stability)
         
         # ========== Dataset Configuration ==========
         # Choose dataset: 'ag_news' | 'imdb' | 'dbpedia' | 'yahoo_answers' — set num_labels and max_length accordingly
         # Dataset 1: AG News
-        'dataset': 'ag_news',  # news classification (4 classes). AG News reference run 260213
-        'num_labels': 4,       # AG News: 4 | IMDB: 2 | DBpedia: 14 | Yahoo Answers: 10
-        'max_length': 128,     # AG News: 128 | IMDB: 512/256 | DBpedia: 512 | Yahoo Answers: 256
+        'dataset': 'ag_news',  # news classification (4 classes)
+        'num_labels': 4,       # Number of classes. AG News: 4 | IMDB: 2 | DBpedia: 14 | Yahoo Answers: 10
+        'max_length': 128,     # Max tokens per sample. AG News: 128 | IMDB: 512/256 | DBpedia: 512 | Yahoo Answers: 128
         # -------------------------------------------
         # Dataset 2: IMDB
         # 'dataset': 'imdb',   # sentiment (2 classes)
@@ -1065,7 +1068,7 @@ def main(config_overrides: Optional[Dict] = None):
         # Dataset 4: Yahoo Answers (10 classes, 1.4M train / 60K test)
         # 'dataset': 'yahoo_answers',   # topic classification (10 classes, yassiracharki/Yahoo_Answers_10_categories_for_NLP)
         # 'num_labels': 10,       # Yahoo Answers: 10 classes
-        # 'max_length': 128,      # Yahoo reference runs 260302-260313 use 128 (earlier 260227 run used 256)
+        # 'max_length': 128,
         
         # ========== Data Distribution ==========
         'data_distribution': 'non-iid',  # 'iid' for uniform random, 'non-iid' for Dirichlet-based heterogeneous distribution
@@ -1076,34 +1079,32 @@ def main(config_overrides: Optional[Dict] = None):
         # ========== Training Mode Configuration ==========
         'use_lora': True,  # True for LoRA fine-tuning, False for full fine-tuning
         # LoRA parameters (only used when use_lora=True)
-        # NOTE: Lower r values = faster training but potentially less capacity
-        # Recommended: r=8 for speed, r=16 for better performance (default)
         'lora_r': 8,  # LoRA rank (controls the rank of low-rank matrices). r=8 for speed, r=16/32 for better capacity
-        'lora_alpha': 16,  # LoRA alpha (scaling factor, typically 2*r). Must match r: alpha=2*r
+        'lora_alpha': 16,  # LoRA alpha (scaling factor), keep alpha = 2*r
         'lora_dropout': 0.1,  # LoRA dropout rate
-        'lora_target_modules': None,  # None = use default for DistilBERT (["q_lin", "k_lin", "v_lin", "out_lin"])
+        'lora_target_modules': None,  # None = model-specific default (see models.py), e.g. Pythia: query_key_value, dense_h_to_4h, dense_4h_to_h
         
         # Model configuration
         # Supported models:
         # Encoder-only (BERT-style): 'distilbert-base-uncased', 'bert-base-uncased', 'roberta-base', 'microsoft/deberta-v3-base'
-        'model_name': 'distilbert-base-uncased',  # distilbert 67M (paper DistilBERT setting; reference run 260212)
-        # # -------------------------------------------
+        # 'model_name': 'distilbert-base-uncased',  # distilbert 67M
+        # -------------------------------------------
         # Decoder-only (GPT-style): 'gpt2', 'EleutherAI/pythia-160m', 'EleutherAI/pythia-1b', 'facebook/opt-125m', 'Qwen/Qwen2.5-0.5B'
         # 'model_name': 'gpt2',                      # GPT-2 124M — stable decoder baseline
-        # 'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M (reference runs 260213 AG News / 260313 Yahoo: grad_clip_norm 1.0)
+        'model_name': 'EleutherAI/pythia-160m',    # Pythia-160M
         # 'model_name': 'facebook/opt-125m',         # OPT-125M (Meta)
         # 'model_name': 'Qwen/Qwen2.5-0.5B',  # Qwen2.5-0.5B ~494M (Alibaba, LLaMA-style arch, Apache 2.0) — use BASE for fine-tuning (or Qwen/Qwen2.5-0.5B-Instruct)
-        # num_labels and max_length: set above in Dataset Configuration based on chosen dataset        
+        # num_labels and max_length: set above in Dataset Configuration based on chosen dataset
 
         # ========== Attack Configuration ==========
         'attack_method': 'AugMP',  # Proposed: 'AugMP' (legacy alias 'GRMP'). Baselines: 'ALIE', 'SignFlipping', 'Gaussian', 'GAP'
-        'attack_start_round': 0,  # Round when attack phase starts (int, now all rounds use complete poisoning)
+        'attack_start_round': 0,  # Round when attack phase starts (int); all rounds use complete poisoning
         
         # ========== ALIE Attack Parameters (only used when attack_method='ALIE') ==========
         'alie_z_max': None,  # NeurIPS '19: z-score multiplier for ALIE. None = auto-compute based on num_clients and num_attackers
-        'alie_attack_start_round': None,  # Round to start ALIE attack (None = start immediately, overrides attack_start_round)
+        'alie_attack_start_round': None,  # Round to start ALIE attack (None = start immediately)
         # ========== Sign-Flipping Attack Parameters (only used when attack_method='SignFlipping') ==========
-        'sign_flip_scale': 10.0,  # ICML '18: malicious = -scale * g_own (own update). Paper uses 10.
+        'sign_flip_scale': 10.0,  # ICML '18: malicious = -scale * g_own (own update)
         'sign_flip_attack_start_round': None,  # Round to start Sign-Flipping attack (None = start immediately)
         # ========== Gaussian Attack Parameters (only used when attack_method='Gaussian') ==========
         'gaussian_attack_start_round': None,  # USENIX Security '20: Round to start Gaussian attack (None = start immediately)
@@ -1112,32 +1113,31 @@ def main(config_overrides: Optional[Dict] = None):
         # GAP (Gradient Assembly Poisoning) for our coupled aggregation (see attack_baseline_gap.py).
         # Two-stage: offline gradient-ascent degradation target, then online interpolate + Euclidean-distance
         # projection. Distance-only constraint (NO cosine).
-        'gap_target_epochs': None,  # Phase-1 gradient-ascent epochs for the offline target. None = local_epochs (same order as local training). Search range swept: {1, 3, 5}
-        'gap_interp_lambda': 1.0,   # Phase-2 interpolation: m = (1-λ)·g_own + λ·target. 1.0 = approach target fully then distance-clip; 0 = honest. Search range: {0.5, 0.75, 1.0}
+        'gap_target_epochs': None,  # Phase-1 gradient-ascent epochs for the offline target. None = local_epochs
+        'gap_interp_lambda': 1.0,   # Phase-2 interpolation: m = (1-λ)·g_own + λ·target. 1.0 = approach target fully then distance-clip; 0 = honest
         'gap_dist_bound_stat': 'max',  # Statistic of observed benign→Δ_g distances used as the distance ceiling: 'max' (matches framework benign_max), 'mean', 'median', 'p90'
         'gap_attack_start_round': None,  # Round to start GAP attack (None = start immediately)
 
         # ========== VGAE Training Parameters ==========
-        # Reference paper: input_dim=5, hidden1_dim=32, hidden2_dim=16, num_epoch=10, lr=0.01
         # Note: dim_reduction_size should be <= total trainable parameters
-        'dim_reduction_size': 5000,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed). DistilBERT reference run 260212: 5000 (Pythia AG News 260213: 500)
-        'vgae_epochs': 20,  # Number of epochs for VGAE training (reference: 20)
-        'vgae_lr': 0.01,  # Learning rate for VGAE optimizer (reference: 0.01)
-        'vgae_hidden_dim': 64,  # VGAE hidden layer dimension (per paper: hidden1_dim=32)
-        'vgae_latent_dim': 32,  # VGAE latent space dimension (per paper: hidden2_dim=16)
+        'dim_reduction_size': 500,  # Reduced dimensionality of LLM parameters (auto-adjusted for LoRA if needed)
+        'vgae_epochs': 20,  # Number of epochs for VGAE training
+        'vgae_lr': 0.01,  # Learning rate for VGAE optimizer
+        'vgae_hidden_dim': 64,  # VGAE hidden layer dimension
+        'vgae_latent_dim': 32,  # VGAE latent space dimension
         'vgae_dropout': 0,  # VGAE encoder dropout rate (0=no dropout, higher=more regularization to prevent overfitting)
         'vgae_kl_weight': 0.1,  # KL divergence weight in VGAE loss: L = L_recon + kl_weight * KL(q||p). Higher=stronger latent regularization
         # ========== Graph Construction Parameters ==========
         'graph_threshold': 0.5,  # Cosine similarity threshold for adjacency matrix: A[i,j]=1 if sim(Δ_i,Δ_j)>threshold, else 0. Higher=sparser graph
 
         # ========== AugMP proxy optimization parameters ==========
-        'proxy_step': 0.001,  # Step size for gradient-free ascent toward global-loss proxy
-        'proxy_steps': 100,  # Number of optimization steps for AugMP proxy objective (int). DistilBERT reference run 260212: 100 (Pythia AG News 260213: 200)
-        'attacker_proxy_grad_clip_norm': 1.0,  # AugMP proxy-parameter update only; separate from benign training
-        'attacker_claimed_data_size': None,  # None = use actual assigned data size
-        # ----- Limited-observability ablation (opt-in; see observability.py / run_observability_sweep.py) -----
-        'attacker_observed_benign': None,  # None = attackers observe ALL benign updates (original behaviour). int k = observe k benign clients; float in (0,1] = observe that fraction
-        'attacker_observation_mode': 'fixed',  # 'fixed' = same subset every round (compromised peers / tapped links); 'random' = re-drawn each round; 'largest' = k benign clients with most data
+        'proxy_step': 0.001,  # Step size (Adam learning rate) for the ascent on the global-loss proxy
+        'proxy_steps': 200,  # Number of optimization steps for AugMP proxy objective (int)
+        'attacker_proxy_grad_clip_norm': 1.0,  # Grad clipping for the AugMP proxy-parameter update only; separate from benign training
+        'attacker_claimed_data_size': None,  # Data size the attacker reports for weighted aggregation (None = actual assigned data size)
+        # ----- Limited-observability ablation (opt-in; see observe/observability.py) -----
+        'attacker_observed_benign': None,  # None = attackers observe ALL benign updates. int k = observe k benign clients; float in (0,1] = observe that fraction
+        'attacker_observation_mode': 'fixed',  # 'fixed' = same subset every round (compromised peers / tapped links); 'random' = re-drawn each round; 'largest' = k benign clients with most data; 'adaptive' = rotate through peers, then lock onto k of them
         'attacker_observation_seed': None,  # None = use config['seed'] to draw the observed subset (set e.g. 1, 2 for a different subset at the same k)
         'attacker_observation_criterion': 'deviant',  # 'adaptive' mode only: lock onto the most 'deviant' (largest ||Δ_i-Δ_g||/||Δ_g||) or most 'representative' peers
         'attacker_observation_explore_rounds': None,  # 'adaptive' mode only: rotation rounds before locking in (None = ceil(num_benign / k))
@@ -1147,10 +1147,10 @@ def main(config_overrides: Optional[Dict] = None):
 
         # ========== Formula 4 Constraint Parameters ==========
         'dist_bound': None,  # Distance threshold for constraint (4b): d(w'_j(t), w'_g(t)) ≤ dist_bound (None = use benign max distance)
-        'sim_bound_low': None,  # Manual lower bound for cosine similarity (None = use benign min). Inert here: DistilBERT reference run 260212 ran with the similarity constraint OFF (Pythia AG News 260213 used 0.0)
+        'sim_bound_low': 0.0,  # Manual lower bound for cosine similarity (None = use benign min). e.g. 0.0 to require non-negative similarity
         'sim_bound_up': None,   # Manual upper bound for cosine similarity (None = use benign mean)
         # Server cosine similarity mode: 'local_vs_global' (each client vs Δ_g) | 'pairwise' (local vs local, report mean to others) | 'both'
-        'server_similarity_mode': 'local_vs_global',  # DistilBERT reference run 260212: 'local_vs_global' (log: "Computing cosine similarities (weighted aggregation...)"). 'pairwise' avoids self-comparison (Pythia AG News 260213 used 'pairwise'). NOTE: this changes the reported per-client cosine metric, so it must match the run being compared against
+        'server_similarity_mode': 'pairwise',  # Use 'pairwise' to avoid self-comparison; set to 'local_vs_global' to match AugMP constraint definition
         
         # ========== Lagrangian Dual Parameters ==========
         'use_lagrangian_dual': True,  # Whether to use Lagrangian Dual mechanism (bool, True/False)
@@ -1158,9 +1158,9 @@ def main(config_overrides: Optional[Dict] = None):
         'lambda_dist_init': 0.1,  # Initial λ_dist(t) value for distance constraint: dist(Δ_att, Δ_g) ≤ dist_bound
         'lambda_dist_lr': 0.01,    # Learning rate for λ_dist(t) update (dual ascent step size)
         
-        # ========== Cosine Similarity Constraint Parameters (TWO-SIDED with TWO multipliers) False by default ==========
-        'use_cosine_similarity_constraint': False,  # DistilBERT reference run 260212: False (its attacker log has NO λ_sim/sim_bound terms — distance constraint only). Pythia AG News 260213 / Yahoo 260313: True
-        'use_pairwise_similarity_in_constraint': False,  # When True and similarity constraint on: use pairwise sim (align with server_similarity_mode='pairwise'). Inert while the similarity constraint is off
+        # ========== Cosine Similarity Constraint Parameters (TWO-SIDED with TWO multipliers) ==========
+        'use_cosine_similarity_constraint': True,  # Whether to enable cosine similarity constraints (bool, True/False)
+        'use_pairwise_similarity_in_constraint': True,  # When True and similarity constraint on: use pairwise sim (align with server_similarity_mode='pairwise')
         'lambda_sim_low_init': 0.1,  # Initial λ_sim_low(t) value for lower bound constraint: sim_bound_low <= sim_att
         'lambda_sim_up_init': 0.1,   # Initial λ_sim_up(t) value for upper bound constraint: sim_att <= sim_bound_up
         'lambda_sim_low_lr': 0.01,    # Learning rate for λ_sim_low(t) update
@@ -1169,17 +1169,17 @@ def main(config_overrides: Optional[Dict] = None):
         # ========== Augmented Lagrangian Method (ALM) Parameters ==========
         # Standard ALM adds quadratic penalties: (ρ/2) * g(x)^2 for each inequality constraint g(x) ≤ 0.
         'use_augmented_lagrangian': True,   # Enable Augmented Lagrangian (requires use_lagrangian_dual=True)
-        'lambda_update_mode': 'classic',    # Dual variable update: "classic"=λ += lr*g (fixed step), "alm"=λ += ρ*g (penalty-scaled step, standard ALM). AG News reference run 260213: 'classic' (log: λ_dist 0.1→0.1020 with g=0.1961, lr=0.01); Yahoo reference run 260313: 'alm' (log: λ_dist 0.1→0.2704 with g=0.1704, ρ=1)
+        'lambda_update_mode': 'classic',    # Dual variable update: "classic"=λ += lr*g (fixed step), "alm"=λ += ρ*g (penalty-scaled step, standard ALM)
         # Penalty parameters ρ (per-constraint): controls quadratic penalty strength (ρ/2)*max(0,g)^2 in ALM objective
-        'rho_dist_init': 1.0,
-        'rho_sim_low_init': 1.0,
-        'rho_sim_up_init': 1.0,
+        'rho_dist_init': 1.0,  # Initial ρ for the distance constraint
+        'rho_sim_low_init': 1.0,  # Initial ρ for the lower similarity bound
+        'rho_sim_up_init': 1.0,  # Initial ρ for the upper similarity bound
         # Adaptive ρ update (monotone increase)
-        'rho_adaptive': True,
+        'rho_adaptive': True,  # Enable the adaptive ρ update
         'rho_theta': 0.5,            # If σ_k > theta * σ_{k-1} then increase ρ
-        'rho_increase_factor': 2.0,
-        'rho_min': 1e-3,  # AG News repeat of 260213 used 1e-3 (Yahoo reference run 260313: 1e-4); no effect while rho_adaptive only increases ρ
-        'rho_max': 1e3,  # DistilBERT reference run 260212: 1e3 (log: ρ_dist caps at 1000.0000); Pythia AG News 260213: 1e4
+        'rho_increase_factor': 2.0,  # ρ is multiplied by this factor on each increase
+        'rho_min': 1e-3,  # Lower bound on ρ
+        'rho_max': 1e4,  # Upper bound on ρ
 
         'profile_overhead': False,  # True: per-round wall-clock + peak-GPU-memory per component (attacker stages,
                                     # benign local training, aggregation, evaluation) printed every round, summary
@@ -1188,7 +1188,7 @@ def main(config_overrides: Optional[Dict] = None):
         # Krum / Multi-Krum / Trimmed Mean / Coordinate-wise Median are evaluated every round on the SAME client
         # updates FedAvg aggregates, to measure whether the malicious updates WOULD be rejected / trimmed
         # (Detection Rate, False Positive Rate, Evasion Rate). Nothing is applied: aggregation, attackers and all
-        # random streams are unchanged. False = output byte-identical to a run without these keys.
+        # random streams are unchanged.
         'shadow_defense_enabled': False,        # master switch; False = no extra compute, no extra prints, no extra log keys
         'shadow_defense_f': None,               # f assumed by Krum/Multi-Krum; None = number of attacker clients registered on the server
         'shadow_defense_beta': None,            # beta for Trimmed Mean (per side); None = same as f
@@ -1198,8 +1198,8 @@ def main(config_overrides: Optional[Dict] = None):
 
         # ========== Proxy Loss Estimation Parameters ==========
         'attacker_use_proxy_data': True,  # If True, AugMP client uses proxy set to estimate F(w'_g); if False, no data access (constraint-only optimization)
+        'attacker_proxy_independent': True,  # True: the proxy set is an independent dataset
         'proxy_sample_size': 512,  # Number of samples in proxy dataset for F(w'_g) estimation (int)
-                                # Increased from 128 to 512 for better accuracy (4 batches with test_batch_size=128)
         'proxy_max_batches_opt': 1,  # Max batches per _proxy_global_loss call in optimization loop (int)
                                 # Only has effect when proxy set has >1 batch (proxy_sample_size > test_batch_size).
         'proxy_max_batches_eval': 1,  # Max batches per _proxy_global_loss call in final evaluation (int)

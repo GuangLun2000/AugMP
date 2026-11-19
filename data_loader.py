@@ -60,7 +60,7 @@ class DataManager:
     def __init__(self, num_clients, num_attackers, test_seed,
                  dataset_size_limit=None, batch_size=None, test_batch_size=None,
                  model_name: str = "distilbert-base-uncased", max_length: int = 128,
-                 dataset: str = "ag_news"):
+                 dataset: str = "ag_news", proxy_independent: bool = False, proxy_sample_size: int = 512):
         
         """
         Initialize DataManager.
@@ -76,6 +76,11 @@ class DataManager:
             model_name: Hugging Face model name for tokenizer initialization
             max_length: Max token length (AG News: 128, IMDB: 256-512, DBpedia: 512, Yahoo Answers: 256)
             dataset: 'ag_news' | 'imdb' | 'dbpedia' | 'yahoo_answers'
+            proxy_independent: Source of the attacker proxy set (AugMP F(w'_g) estimation).
+                               False (original setting) = a subset of the evaluation (test) set.
+                               True = an independent set that shares no sample with the evaluation set or with
+                               any client's training data (see _build_independent_proxy).
+            proxy_sample_size: Size of the independent proxy set (only used when proxy_independent=True)
         """
 
         if batch_size is None or test_batch_size is None:
@@ -90,7 +95,15 @@ class DataManager:
         self.max_length = max_length
         self.model_name = model_name
         self.dataset = dataset.lower()
-        
+
+        # Attacker proxy set (see get_proxy_eval_loader). The dataset loaders record the full training split and the
+        # rows drawn for the clients in _proxy_pool; _load_data() uses it for the independent proxy set, then drops it.
+        self.proxy_independent = bool(proxy_independent)
+        self.proxy_sample_size = int(proxy_sample_size)
+        self.proxy_texts: List[str] = []
+        self.proxy_labels: List[int] = []
+        self._proxy_pool = None  # (full_train_texts, full_train_labels, positions drawn for the clients | None = all)
+
         # Load tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         
@@ -123,6 +136,61 @@ class DataManager:
             self._load_yahoo_answers()
         else:
             self._load_ag_news()
+        if self.proxy_independent:
+            self._build_independent_proxy()
+        self._proxy_pool = None  # release the reference to the full training split
+
+    def _build_independent_proxy(self):
+        """
+        Independent attacker proxy set (config 'attacker_proxy_independent' = True).
+
+        Draws `proxy_sample_size` labelled samples whose texts appear neither in the evaluation set nor in the
+        client training data:
+          * dataset_size_limit set: from the training rows NOT drawn for the clients, so the client data and the
+            evaluation set stay exactly the same as with the original setting (benign / baseline runs unchanged);
+          * all training rows in use (no limit): held out from the training split, i.e. removed from the client data.
+        Uses a private RNG seeded with `test_seed` (config['seed']); the global torch / numpy streams are untouched.
+        """
+        full_texts, full_labels, selected = self._proxy_pool
+        k = self.proxy_sample_size
+        rng = np.random.default_rng(self.test_seed)
+        eval_texts = set(self.test_texts)
+
+        def draw(texts, order, excluded):
+            chosen, seen = [], set()
+            for i in order:
+                t = texts[i]
+                if t in excluded or t in seen:
+                    continue
+                chosen.append(int(i))
+                seen.add(t)
+                if len(chosen) == k:
+                    break
+            return chosen
+
+        chosen = []
+        if selected is not None:
+            unused = np.ones(len(full_texts), dtype=bool)
+            unused[np.asarray(selected, dtype=np.int64)] = False
+            chosen = draw(full_texts, rng.permutation(np.flatnonzero(unused)), eval_texts | set(self.train_texts))
+
+        if selected is not None and len(chosen) == k:
+            self.proxy_texts = [full_texts[i] for i in chosen]
+            self.proxy_labels = [full_labels[i] for i in chosen]
+            source = "from training rows not used by any client"
+        else:
+            chosen = draw(self.train_texts, rng.permutation(len(self.train_texts)), eval_texts)
+            self.proxy_texts = [self.train_texts[i] for i in chosen]
+            self.proxy_labels = [self.train_labels[i] for i in chosen]
+            held_out = set(self.proxy_texts)
+            keep = [i for i, t in enumerate(self.train_texts) if t not in held_out]
+            removed = len(self.train_texts) - len(keep)
+            self.train_texts = [self.train_texts[i] for i in keep]
+            self.train_labels = [self.train_labels[i] for i in keep]
+            source = f"held out from the training split ({removed} rows removed from the client data)"
+
+        print(f"  🔒 Independent attacker proxy set: {len(self.proxy_texts)} samples {source}; no overlap with the "
+              f"{len(self.test_texts)} evaluation samples or the {len(self.train_texts)} client training samples")
 
     def _load_imdb(self):
         """Load IMDB dataset from Hugging Face (stanfordnlp/imdb)."""
@@ -141,12 +209,14 @@ class DataManager:
         self.test_labels = list(test_data["label"])
 
         print(f"  📊 Full IMDB Dataset: Train={len(self.train_texts)}, Test={len(self.test_texts)}")
+        self._proxy_pool = (self.train_texts, self.train_labels, None)  # full training split (independent proxy set)
 
         if self.dataset_size_limit is not None and self.dataset_size_limit > 0:
             rng = np.random.default_rng(42)
             n_train = min(self.dataset_size_limit, len(self.train_texts))
             n_test = min(int(self.dataset_size_limit * 0.15), len(self.test_texts))
             idx_train = rng.choice(len(self.train_texts), n_train, replace=False)
+            self._proxy_pool = (self.train_texts, self.train_labels, idx_train)  # + rows drawn for the clients
             idx_test = rng.choice(len(self.test_texts), n_test, replace=False)
             self.train_texts = [self.train_texts[i] for i in idx_train]
             self.train_labels = [self.train_labels[i] for i in idx_train]
@@ -177,12 +247,14 @@ class DataManager:
         self.test_labels = list(test_data["label"])
 
         print(f"  📊 Full DBpedia Dataset: Train={len(self.train_texts)}, Test={len(self.test_texts)}")
+        self._proxy_pool = (self.train_texts, self.train_labels, None)  # full training split (independent proxy set)
 
         if self.dataset_size_limit is not None and self.dataset_size_limit > 0:
             rng = np.random.default_rng(42)
             n_train = min(self.dataset_size_limit, len(self.train_texts))
             n_test = min(int(self.dataset_size_limit * 0.15), len(self.test_texts))
             idx_train = rng.choice(len(self.train_texts), n_train, replace=False)
+            self._proxy_pool = (self.train_texts, self.train_labels, idx_train)  # + rows drawn for the clients
             idx_test = rng.choice(len(self.test_texts), n_test, replace=False)
             self.train_texts = [self.train_texts[i] for i in idx_train]
             self.train_labels = [self.train_labels[i] for i in idx_train]
@@ -273,12 +345,14 @@ class DataManager:
             print(f"  ✅ Saved to {save_dir}/ for future use.")
 
         print(f"  📊 Full Yahoo Answers Dataset: Train={len(self.train_texts)}, Test={len(self.test_texts)}")
+        self._proxy_pool = (self.train_texts, self.train_labels, None)  # full training split (independent proxy set)
 
         if self.dataset_size_limit is not None and self.dataset_size_limit > 0:
             rng = np.random.default_rng(42)
             n_train = min(self.dataset_size_limit, len(self.train_texts))
             n_test = min(int(self.dataset_size_limit * 0.15), len(self.test_texts))
             idx_train = rng.choice(len(self.train_texts), n_train, replace=False)
+            self._proxy_pool = (self.train_texts, self.train_labels, idx_train)  # + rows drawn for the clients
             idx_test = rng.choice(len(self.test_texts), n_test, replace=False)
             self.train_texts = [self.train_texts[i] for i in idx_train]
             self.train_labels = [self.train_labels[i] for i in idx_train]
@@ -390,6 +464,9 @@ class DataManager:
         self.train_labels = train_sample['label'].tolist()
         self.test_texts = test_sample['full_text'].tolist()
         self.test_labels = test_sample['label'].tolist()
+        # Full training split + positions of the rows drawn for the clients (None = all rows), for the independent proxy set
+        self._proxy_pool = (train_df['full_text'].tolist(), train_df['label'].tolist(),
+                            None if train_sample is train_df else train_df.index.get_indexer(train_sample.index))
 
         print(f"  ✅ Dataset ready! Train: {len(self.train_texts)}, Test: {len(self.test_texts)}")
         if len(self.train_texts) < len(train_df) or len(self.test_texts) < len(test_df):
@@ -404,9 +481,17 @@ class DataManager:
 
     def get_proxy_eval_loader(self, sample_size: int = 128) -> DataLoader:
         """
-        Small clean proxy set for attacker-side F(w'_g) estimation.
-        Uses a deterministic subset of the test set (no label flips).
+        Small clean proxy set for attacker-side F(w'_g) estimation (no label flips).
+          proxy_independent=True : the first `sample_size` samples of the independent proxy set built at load time
+                                   (no overlap with the evaluation set or with any client's training data).
+          proxy_independent=False: original setting -- a deterministic subset of the evaluation (test) set.
         """
+        if self.proxy_independent:
+            n = min(int(sample_size), len(self.proxy_texts))
+            if n == 0:
+                return self.get_empty_loader()
+            dataset = NewsDataset(self.proxy_texts[:n], self.proxy_labels[:n], self.tokenizer, max_length=self.max_length)
+            return DataLoader(dataset, batch_size=self.test_batch_size, shuffle=False)
         if not self.test_texts:
             return self.get_empty_loader()
         rng = np.random.default_rng(self.test_seed)
