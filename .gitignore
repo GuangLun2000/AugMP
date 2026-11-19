@@ -2,7 +2,6 @@
 .DS_Store
 *.pyc
 __pycache__/
-.pytest_cache/
 
 # Experiment outputs and auto-downloaded data
 /results/

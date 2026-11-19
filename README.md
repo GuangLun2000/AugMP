@@ -37,7 +37,6 @@
 │   ├── plot_observability.py          # Sweep figures + CSV summary
 │   ├── overhead.py                    # Per-round runtime / GPU-memory profiling (config 'profile_overhead')
 │   └── run_m_sweep.py                 # Runtime vs. number of selected parameters M
-├── tests/                             # CPU-only unit tests: python -m pytest tests/ -q
 ├── data/                              # Training and testing datasets
 │   ├── AG News Datasets/              # train.csv, test.csv, Task 2 probe files (*.json)
 │   └── Yahoo! Answers Datasets/       # Source link (downloaded automatically)
