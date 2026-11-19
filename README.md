@@ -2,7 +2,7 @@
 
 [![arXiv](https://img.shields.io/badge/arXiv-2605.07961-b31b1b?style=for-the-badge&logo=arxiv&logoColor=white)](https://arxiv.org/abs/2605.07961) &nbsp; [![GitHub](https://img.shields.io/badge/GitHub-Code-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/GuangLun2000/AugMP)
 
-- Graph Representation Learning Augmented Model Manipulation on Federated Fine-Tuning of LLMs.
+- Model Manipulation against Federated Fine-Tuning of LLMs: An Adversarial Graph Representation Learning Approach
 - [**Hanlin Cai**](https://caihanlin.com/), Kai Li, Houtianfu Wang, Haofan Dong, Yichen Li, Falko Dressler, Ozgur B. Akan
 - University of Cambridge; University of Luxembourg; TU Berlin; Koc University
 
